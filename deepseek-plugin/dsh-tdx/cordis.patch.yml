@@ -1,0 +1,3 @@
+- insert:
+    - id: tdx-data
+      name: '@local/dsh-tdx'

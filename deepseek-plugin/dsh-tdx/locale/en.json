@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tongdaxin Data",
+    "description": "Read Tongdaxin (TDX) binary .day/.lc1/.lc5 quote files: summaries, indicators, weekly/monthly resampling, CSV export and directory scans, with the tdx_data tool and /tdx command."
+  }
+}
