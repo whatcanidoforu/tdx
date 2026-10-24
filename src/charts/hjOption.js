@@ -12,6 +12,8 @@
  *      加速度变化>0 且 加速值<100 → 绿色 '+'
  *      加速度变化<0 且 加速值<100 → 绿色 '-'
  *      accelLabel 的 '+R' / '-G' / '+G' / '-G' 即上述四种状态。
+ *
+ * 底部另有一条 ECharts 原生 slider 缩放条，与 inside 缩放共用同一 x 轴。
  */
 
 /** 三条水平参考线：值、名称、颜色（暗色主题下用可读色替代原式黑色）。 */
@@ -66,6 +68,17 @@ export function buildHjOption(data) {
     });
   }
 
+  // HJ_5 买点：柱顶上方一个橙色三角 + 'B'，信号稀疏，不挤占底部加速文字。
+  const hj5Points = [];
+  for (let i = 0; i < N; i++) {
+    const row = rows[i];
+    if (!row.hj5) continue;
+    const a = row.hj10;
+    const b = row.hj11;
+    if (a == null || b == null || Number.isNaN(a) || Number.isNaN(b)) continue;
+    hj5Points.push([i, Math.min(92, Math.max(a, b) + 5)]);
+  }
+
   return {
     backgroundColor: 'transparent',
     animation: false,
@@ -75,9 +88,58 @@ export function buildHjOption(data) {
       backgroundColor: 'rgba(22,27,34,0.95)',
       borderColor: '#30363d',
       textStyle: { color: '#e6edf3', fontSize: 12 },
+      formatter: (params) => {
+        const list = Array.isArray(params) ? params : [params];
+        const index = list.find((item) => item && Number.isInteger(item.dataIndex))?.dataIndex;
+        if (index == null) return '';
+        const row = rows[index];
+        if (!row) return '';
+        const num = (value) => (value == null || Number.isNaN(value) ? '—' : Number(value).toFixed(2));
+        const diff = row.hj10 == null || row.hj11 == null ? null : row.hj10 - row.hj11;
+        const diffColor = diff == null ? '#8b949e' : diff >= 0 ? '#f85149' : '#3fb950';
+        const lines = [
+          `<span style="color:#8b949e">HJ10</span> <b>${num(row.hj10)}</b>`
+            + `　<span style="color:#8b949e">HJ11</span> <b>${num(row.hj11)}</b>`,
+          `<span style="color:#8b949e">差值</span> <b style="color:${diffColor}">`
+            + `${diff == null ? '—' : `${diff >= 0 ? '+' : ''}${diff.toFixed(2)}`}</b>`,
+        ];
+        if (row.hj5) lines.push('<span style="color:#f5a623">▲ HJ5 买点</span>');
+        if (row.accelLabel) {
+          const tone = row.accelLabel[1] === 'R' ? '#f85149' : '#3fb950';
+          lines.push(`<span style="color:#8b949e">加速</span> <b style="color:${tone}">${row.accelLabel[0]}</b>`);
+        }
+        const head = `<div style="font-weight:600;margin-bottom:3px">`
+          + `${row.date ?? ''}${row.time ? ` ${row.time}` : ''}</div>`;
+        return `${head}${lines.join('<br/>')}`;
+      },
     },
-    grid: { left: '8%', right: '5%', top: '5%', bottom: '10%' },
-    dataZoom: [{ type: 'inside', xAxisIndex: 0, start: 0, end: 100 }],
+    grid: { left: '8%', right: '5%', top: '5%', bottom: '20%' },
+    dataZoom: [
+      { type: 'inside', xAxisIndex: 0, start: 0, end: 100 },
+      {
+        type: 'slider',
+        xAxisIndex: 0,
+        start: 0,
+        end: 100,
+        height: 24,
+        // ECharts 会把 slider 整体下移 moveHandleSize(7px)，12 ≈ 7 + 5px 底部留白
+        bottom: 12,
+        showDetail: true,
+        borderColor: '#30363d',
+        backgroundColor: 'rgba(22,27,34,0.6)',
+        fillerColor: 'rgba(88,166,255,0.18)',
+        handleStyle: { color: '#58a6ff' },
+        dataBackground: {
+          lineStyle: { color: '#30363d' },
+          areaStyle: { color: '#21262d' },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: '#58a6ff' },
+          areaStyle: { color: 'rgba(88,166,255,0.15)' },
+        },
+        textStyle: { color: '#8b949e', fontSize: 10 },
+      },
+    ],
     xAxis: {
       type: 'category',
       data: dates,
@@ -143,6 +205,26 @@ export function buildHjOption(data) {
             label: { color },
           })),
         },
+      },
+      {
+        name: 'HJ5 买点',
+        type: 'scatter',
+        data: hj5Points,
+        symbol: 'triangle',
+        symbolSize: 9,
+        itemStyle: { color: '#f5a623' },
+        label: {
+          show: true,
+          position: 'top',
+          formatter: 'B',
+          color: '#f5a623',
+          fontSize: 9,
+          fontWeight: 700,
+          distance: 1,
+        },
+        silent: true,
+        tooltip: { show: false },
+        z: 15,
       },
       {
         name: '加速标记',

@@ -2,6 +2,7 @@
   <div class="indicator-chart">
     <div class="chart-header">
       <span class="chart-title">HJ 指标</span>
+      <span class="chart-hint"><b>B</b> HJ5 买点</span>
     </div>
     <div ref="chartRef" class="chart-body"></div>
   </div>
@@ -61,8 +62,21 @@ watch(() => props.data, () => {
 }
 
 .chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.chart-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chart-hint b {
+  color: #f5a623;
+  font-weight: 700;
 }
 
 .chart-title {
