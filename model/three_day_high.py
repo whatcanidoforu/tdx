@@ -248,6 +248,18 @@ def train_models(sig: pd.DataFrame, out_dir: str, args):
     return test
 
 
+def next_weekdays(date_int: int, n: int = 3):
+    """按周一~周五粗略推算信号日之后的 n 个交易日（不考虑法定节假日）。"""
+    from datetime import datetime, timedelta
+    d = datetime.strptime(str(date_int), "%Y%m%d")
+    out = []
+    while len(out) < n:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(d.strftime("%Y%m%d"))
+    return out
+
+
 def predict_latest(out_dir: str, args):
     path = os.path.join(out_dir, "recent_signals.parquet")
     if not os.path.exists(path):
@@ -265,15 +277,49 @@ def predict_latest(out_dir: str, args):
     rows["prob_5pct"] = clf.predict(rows[BASE_FEATURE_COLUMNS])
     rows["pred_high_px"] = rows["close"] * (1.0 + rows["pred_high_ret"])
     rows = rows.sort_values("pred_high_ret", ascending=False)
-    cols = ["stock_code", "market", "date", "close", "pred_high_ret", "pred_high_px", "prob_5pct"]
-    out = rows[cols].copy()
-    out["pred_high_ret"] = (out["pred_high_ret"] * 100).round(2)
-    out["prob_5pct"] = (out["prob_5pct"] * 100).round(1)
-    out["pred_high_px"] = out["pred_high_px"].round(2)
+
+    target_dates = next_weekdays(latest, 3)
+    rows["signal_date"] = rows["date"]
+    rows["target_dates"] = " / ".join(target_dates)
+    out = pd.DataFrame({
+        "stock_code": rows["stock_code"].values,
+        "market": rows["market"].values,
+        "signal_date": rows["signal_date"].values,
+        "close": rows["close"].values,
+        "pred_3d_max_high_ret_pct": (rows["pred_high_ret"].values * 100).round(2),
+        "pred_3d_max_high_px": rows["pred_high_px"].values.round(2),
+        "prob_3d_max_high_ge_5pct": (rows["prob_5pct"].values * 100).round(1),
+        "target_dates": rows["target_dates"].values,
+    })
     out_path = os.path.join(out_dir, f"predict_{latest}.csv")
     out.to_csv(out_path, index=False, encoding="utf-8-sig")
+
+    # 列说明文件（方便直接用 Excel 打开时对照）
+    notes_path = os.path.join(out_dir, f"predict_{latest}_columns.md")
+    notes = f"""# predict_{latest}.csv 列说明
+
+本文件由 `three_day_high.py` 生成。
+
+- `stock_code`：股票代码（6 位）
+- `market`：市场，sh=沪市、sz=深市、bj=北交所
+- `signal_date`：**信号日 T（买入日）**。即在这一天收盘时满足「HJ10 上穿 HJ11 + DIFF 增大」条件，按收盘价买入。
+- `close`：T 日收盘价（买入价）
+- `pred_3d_max_high_ret_pct`：模型预测的 **T+1 ~ T+3 三个交易日内最高点涨幅（%）**
+  - 例如 5.20 表示预测最高价比买入价高 5.20%
+- `pred_3d_max_high_px`：对应的预测最高价（= close × (1 + 预测涨幅)）
+- `prob_3d_max_high_ge_5pct`：模型预测「3 日内最高点涨幅 ≥ 5%」的概率（%）
+- `target_dates`：预测覆盖的 3 个交易日（按周一~周五粗略推算，未考虑节假日）
+
+> 注意：这是 **T 日收盘后的预测**，不是 T 日本身的预测。
+> 例如 signal_date=20261028 的文件，预测的是 20261029 / 20261030 / 20261102 三个交易日内的最高点。
+> 若要预测 10/29 作为信号日，需要等 10/29 收盘、日线数据下载完成后再运行一次脚本。
+"""
+    with open(notes_path, "w", encoding="utf-8") as f:
+        f.write(notes)
+
     print(out.head(20).to_string(index=False))
     print(f"\n预测已保存：{out_path}")
+    print(f"列说明已保存：{notes_path}")
 
 
 def main():

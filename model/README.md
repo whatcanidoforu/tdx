@@ -368,8 +368,25 @@ Top 特征：`ret1`（当日涨跌幅）、`atr14_pct`、`vol20`、`amplitude`�
 
 ### 11.5 最新一日预测（2026-10-28，338 条信号）
 
-文件：`output_3day/predict_20261028.csv`（`pred_high_ret` = 预测 3 日最高涨幅，
-`pred_high_px` = 对应预测最高价，`prob_5pct` = 冲高 ≥5% 的概率）
+文件：`output_3day/predict_20261028.csv`（同目录还有 `predict_20261028_columns.md` 列说明）
+
+| 列名 | 含义 |
+|---|---|
+| `stock_code` | 股票代码 |
+| `market` | 市场：sh / sz / bj |
+| `signal_date` | **信号日 T（买入日）**：当天收盘满足「HJ 金叉 + DIFF 增大」，按收盘价买入 |
+| `close` | T 日收盘价（买入价） |
+| `pred_3d_max_high_ret_pct` | 预测 **T+1 ~ T+3 三个交易日内最高点涨幅（%）**，18.08 就是 +18.08% |
+| `pred_3d_max_high_px` | 对应的预测最高价（= close × (1 + 预测涨幅)） |
+| `prob_3d_max_high_ge_5pct` | 3 日内最高涨幅 ≥ 5% 的预测概率（%） |
+| `target_dates` | 预测覆盖的 3 个交易日（按周一~周五粗略推算） |
+
+> **数据来源**：信号、`close`、特征全部来自 `D:\MyTools\new_tdx\vipdoc\...\lday` 日线；
+> `pred_*` 是模型输出。这张表**不是 10/28 当天的预测**，而是
+> 「10/28 收盘出现买入信号 → 预测 10/29、10/30、11/02 三个交易日内的最高点」。
+>
+> **如果要对 10/29 做信号日预测**：需要等 10/29 收盘、vipdoc 日线更新后重新运行
+> `three_day_high.py`。脚本会自动把 `signal_date` 换成 10/29，预测窗口换成 10/30、11/02、11/03。
 
 预测最高的几只：
 
