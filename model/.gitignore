@@ -2,7 +2,10 @@
 # 只把代码放进 Git；数据集和模型产物不入库（体积大、可复现）
 data/
 data_test/
+data_intraday/
 output/
 output_test/
+output_seq/
+output_daily_mtf/
 __pycache__/
 *.pyc
