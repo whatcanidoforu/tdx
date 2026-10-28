@@ -7,5 +7,6 @@ output/
 output_test/
 output_seq/
 output_daily_mtf/
+output_3day/
 __pycache__/
 *.pyc
