@@ -119,6 +119,25 @@ t+1 的信号是真实的（至少在测试期内）。
 环境：Python 3.11 + `pandas / numpy / lightgbm / scikit-learn / scipy / pyarrow`
 （本机使用 conda 环境 `firstmodel`）
 
+> ⚠️ **如果 `conda activate firstmodel` 之后运行 `python` 仍然报
+> `No module named 'lightgbm'`**，说明 PowerShell 没有初始化 conda hook（激活静默失败，
+> `python` 实际指向 `D:\conda\python.exe`）。用下面任意一种方式即可：
+>
+> ```powershell
+> # 方式 1：直接用 firstmodel 环境的 python 绝对路径
+> D:\conda\envs\firstmodel\python.exe three_day_high.py
+>
+> # 方式 2：conda run（不用激活）
+> conda run -n firstmodel python three_day_high.py
+>
+> # 方式 3：项目自带启动器（已写死环境路径，参数可透传）
+> .\run_model.ps1
+> .\run_model.ps1 three_day_high.py --rebuild
+> .\run_model.ps1 predict.py --top 20
+> ```
+>
+> 永久修复：执行 `conda init powershell`，然后重开终端（激活后提示符会显示 `(firstmodel)`）。
+
 ```bash
 cd D:\MyTools\zlf\dsh-tdx\web\model
 
@@ -366,10 +385,16 @@ Top 特征：`ret1`（当日涨跌幅）、`atr14_pct`、`vol20`、`amplitude`�
 
 ### 11.6 运行
 
-```bash
-python three_day_high.py              # 扫描信号 + 统计 + 训练 + 最新预测（约 3.5 分钟）
-python three_day_high.py --rebuild    # 忽略缓存重新扫描
+```powershell
+# 推荐：直接用 firstmodel 环境的 python（避免 conda activate 不生效）
+D:\conda\envs\firstmodel\python.exe three_day_high.py
+
+# 或者用项目自带启动器
+.\run_model.ps1
+.\run_model.ps1 three_day_high.py --rebuild
 ```
+
+扫描信号 + 统计 + 训练 + 最新预测约 3.5 分钟；`--rebuild` 忽略缓存重新扫描。
 
 输出目录 `output_3day/`（不入库）：
 
