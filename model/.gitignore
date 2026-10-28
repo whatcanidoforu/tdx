@@ -1,0 +1,8 @@
+# -*- coding: utf-8 -*-
+# 只把代码放进 Git；数据集和模型产物不入库（体积大、可复现）
+data/
+data_test/
+output/
+output_test/
+__pycache__/
+*.pyc
