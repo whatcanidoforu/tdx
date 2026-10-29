@@ -8,5 +8,6 @@ output_test/
 output_seq/
 output_daily_mtf/
 output_3day/
+output_4day/
 __pycache__/
 *.pyc
