@@ -31,6 +31,7 @@ T 日收盘同时满足以下条件：
 | `market` | — | 市场：`sh` 沪市、`sz` 深市、`bj` 北交所 |
 | `signal_date` | YYYYMMDD | **信号日 T（买入日）**，这天收盘满足买入条件 |
 | `buy_close` | 元 | T 日收盘价（买入价） |
+| `T_ret_pct` | % | T 日（信号日）当天的涨跌幅 |
 | `T+1_open`、`T+1_high`、`T+1_low`、`T+1_close` | 元 | 模型预测的 T+1 日开盘/最高/最低/收盘价 |
 | `T+2_*`、`T+3_*`、`T+4_*` | 元 | 同上，分别对应第 2/3/4 个交易日 |
 | `T+1_high_ret_pct` | % | 预测 T+1 最高价相对买入价的涨幅 |
@@ -197,3 +198,30 @@ D:\conda\envs\firstmodel\python.exe four_day_forecast.py
 3. 最高价/最低价预测可用来设止盈/止损参考区间，但实盘未必能成交在极值。
 4. 未考虑手续费、滑点、涨停买不进。
 5. 数据含退市股，仍有幸存者偏差；不构成投资建议。
+
+---
+
+## 9. 回测（预测?实际对照）
+
+`backtest_4day.py` 会把每个字段输出成 **`预测价?实际价`** 的格式，例如：
+
+```
+20.24?20.45      # T+1 开盘：模型预测 20.24，实际开盘 20.45
+21.18?21.01      # T+1 最高：模型预测 21.18，实际最高 21.01
+```
+
+覆盖 T+1 ~ T+4 每天的开盘/最高/最低/收盘（16 列），另含 `T_ret_pct`（T 日涨跌幅）、
+`pred_max_high_4d_ret_pct`（预测 4 日最高涨幅）。
+
+```powershell
+# 单日回测（样本外，2026 年以后）
+D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --top 10
+
+# 保存明细
+D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --save bt.csv
+
+# 区间回测（只输出误差汇总）
+D:\conda\envs\firstmodel\python.exe backtest_4day.py --start 20260901 --end 20261027
+```
+
+注意：模型训练集 `<2025`，2025 是验证集，**2026 年之后才是样本外**；回测 2024 年以前会偏乐观。

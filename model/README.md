@@ -544,7 +544,8 @@ K=1/2 的「单信号质量」最好；K=3 是按你的要求做的更严格过�
 
 ### 12.5 最新 4 日预测（2026-10-28，K=3 共 170 只信号）
 
-文件：`output_4day/predict_4day_20261028.csv`（旧 K=0 版本备份为 `predict_4day_20261028_oldK0.csv`）
+文件：`output_4day/predict_4day_20261028.csv`（旧 K=0 版本备份为 `predict_4day_20261028_oldK0.csv`）。
+CSV 已新增 **`T_ret_pct`** 列（T 日涨跌幅，%），例如 20.0 表示信号日涨停 +20%。
 
 | 代码 | 买入价 | T+1 最高 | T+1 最低 | T+1 收盘 | T+1 最高涨幅 | 4 日最高涨幅 |
 |---|---|---|---|---|---|---|
@@ -576,6 +577,29 @@ predict_4day_20261028.csv  # 最新信号日 4 日 OHLC 预测
 1. 4 日 OHLC 是统计期望，T+3/T+4 误差很大，不要当精确点位。
 2. 开盘/收盘方向不可预测，最高/最低价用于止盈止损参考。
 3. 未考虑手续费、滑点、涨停买不进；不构成投资建议。
+
+### 12.8 回测：预测?实际
+
+新增 `backtest_4day.py`，把每个 OHLC 字段输出成 **`预测价?实际价`**：
+
+```
+20.24?20.45     # T+1 开盘：预测 20.24，实际 20.45
+21.18?21.01     # T+1 最高：预测 21.18，实际 21.01
+```
+
+```powershell
+# 单日回测（2026 年以后才是样本外）
+D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --top 10
+
+# 保存明细（16 列 + T_ret_pct）
+D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --save bt.csv
+
+# 区间回测（只输出误差汇总）
+D:\conda\envs\firstmodel\python.exe backtest_4day.py --start 20260901 --end 20261027
+```
+
+示例：2026-06-15 共 790 只 K=3 信号，16 个目标平均 MAE 3.56%（baseline 3.80%）；
+当天 T+1 最高价 MAE 1.83%（baseline 2.61%），与整体测试集结论一致。
 
 ---
 

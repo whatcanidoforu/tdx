@@ -312,6 +312,7 @@ def predict_latest(data: pd.DataFrame, model, feat_cols, mu, sd, ymu, ysd, out_d
         "market": rows["market"].values,
         "signal_date": rows["date"].values,
         "buy_close": rows["buy_close"].values,
+        "T_ret_pct": (rows["ret1"].values * 100).round(2),
     })
     for h_idx, h in enumerate(HORIZONS):
         for f_idx, f in enumerate(FIELDS):
