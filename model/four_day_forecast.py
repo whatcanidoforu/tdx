@@ -58,6 +58,13 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-root", default=DEFAULT_ROOT)
     ap.add_argument("--out-dir", default=os.path.join(HERE, "output_4day"))
+    ap.add_argument("--streak", type=int, default=3,
+                    help="HJ 金叉前要求连续多少天 hj10<hj11（0=不要求）")
+    ap.add_argument("--min-date", type=int, default=0, help="样本起始日期，0=不限")
+    ap.add_argument("--max-abs-ret", type=float, default=0.35,
+                    help="过滤 |T日涨跌幅| 超过该值的脏数据，0.35=35%")
+    ap.add_argument("--max-amp", type=float, default=0.5,
+                    help="过滤 T 日振幅超过该值的脏数据，0.5=50%")
     ap.add_argument("--valid-start", type=int, default=20250101)
     ap.add_argument("--test-start", type=int, default=20260101)
     ap.add_argument("--epochs", type=int, default=40)
@@ -92,15 +99,17 @@ def raw_dif(close: pd.Series) -> pd.Series:
     return ema12 - ema26
 
 
-def build_dataset(data_root: str, out_dir: str):
+def build_dataset(args):
+    data_root = args.data_root
+    out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
-    cache = os.path.join(out_dir, "signals4.parquet")
-    if os.path.exists(cache):
+    cache = os.path.join(out_dir, f"signals4_K{args.streak}.parquet")
+    if os.path.exists(cache) and not args.rebuild:
         print(f"读取缓存：{cache}")
         return pd.read_parquet(cache)
 
     files = list(iter_stock_files(data_root))
-    print(f"扫描 {len(files)} 个日线文件，计算信号 + 16 个目标 ...")
+    print(f"扫描 {len(files)} 个日线文件（信号：金叉前连续 {args.streak} 天 hj10<hj11）...")
     t0 = time.time()
     frames = []
     for i, (market, code, path) in enumerate(files):
@@ -112,6 +121,10 @@ def build_dataset(data_root: str, out_dir: str):
         hj10, hj11 = feats["hj10"], feats["hj11"]
         dif = raw_dif(df["close"])
         signal = (hj10 > hj11) & (hj10.shift(1) <= hj11.shift(1)) & (dif > dif.shift(1))
+        if args.streak > 0:
+            below = hj10 < hj11
+            for k in range(1, args.streak + 1):
+                signal = signal & below.shift(k)
         if not signal.any():
             continue
 
@@ -142,6 +155,13 @@ def build_dataset(data_root: str, out_dir: str):
 
     data = pd.concat(frames, ignore_index=True)
     data = data.dropna(subset=FEATURES).reset_index(drop=True)
+    # 脏数据过滤：涨跌幅/振幅超过合理范围（老数据里的坏记录）
+    before = len(data)
+    if args.min_date > 0:
+        data = data[data["date"] >= args.min_date]
+    data = data[data["ret1"].abs() <= args.max_abs_ret]
+    data = data[data["amplitude"] <= args.max_amp].reset_index(drop=True)
+    print(f"脏数据过滤：{before:,} -> {len(data):,} 行（去掉 {before-len(data):,} 行）")
     # 训练/评估用：16 个目标齐全的行；最近信号目标会缺，保留供预测
     data["has_targets"] = data[TARGETS].notna().all(axis=1)
     data.to_parquet(cache, index=False)
@@ -314,7 +334,7 @@ def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
     t0 = time.time()
-    data = build_dataset(args.data_root, args.out_dir)
+    data = build_dataset(args)
     print(f"特征数：{len(FEATURES)}（含均线 5/10/20/30/60 与量能特征）")
 
     model, results, pred, test, avg_mae, avg_base = train_mlp(data, FEATURES, args.out_dir, args)
