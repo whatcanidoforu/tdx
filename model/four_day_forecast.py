@@ -43,6 +43,8 @@ EXTRA_FEATURES = [
     "ma_bull_count",
     "vol_chg1", "vol_ratio60", "vol_ma5_ma20", "amt_ma5_ma20",
     "price_vol_corr20",
+    # 影线形态（占振幅比例 / 上下影比例）
+    "upper_share", "lower_share", "shadow_ratio", "body_share",
 ]
 FEATURES = BASE_FEATURE_COLUMNS + EXTRA_FEATURES
 
@@ -90,6 +92,13 @@ def add_extra_features(feats: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
     ret = close.pct_change(fill_method=None)
     vol_chg = vol.pct_change(fill_method=None)
     out["price_vol_corr20"] = ret.rolling(20).corr(vol_chg)
+    # 影线形态：上/下影占振幅比例、上下影比例、实体占比
+    amp = out["amplitude"].replace(0.0, np.nan)
+    up, low = out["upper_shadow"], out["lower_shadow"]
+    out["upper_share"] = (up / amp).fillna(0.0)       # 一字板：无影线
+    out["lower_share"] = (low / amp).fillna(0.0)
+    out["shadow_ratio"] = (up / (up + low).replace(0.0, np.nan)).fillna(0.5)
+    out["body_share"] = (out["body"].abs() / amp).fillna(1.0)
     return out
 
 
