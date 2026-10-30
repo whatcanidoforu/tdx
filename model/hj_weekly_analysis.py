@@ -184,11 +184,12 @@ def main():
             continue
         s = g["max3"]
         label = "<4" if db == 3 else (">=91" if db == 91 else f"{int(db)}-{int(db)+1}")
-        rows.append({"日线HJ档位": label, "日线档位下界": int(db),
-                     "周线HJ分组": str(wg), "信号数": len(g),
-                     "平均最高涨幅(%)": round(s.mean() * 100, 2),
-                     "冲高≥3%": round((s >= 0.03).mean() * 100, 1),
-                     "冲高≥5%": round((s >= 0.05).mean() * 100, 1)})
+        row = {"日线HJ档位": label, "日线档位下界": int(db),
+               "周线HJ分组": str(wg), "信号数": len(g),
+               "平均最高涨幅(%)": round(s.mean() * 100, 2)}
+        for th in THRESHOLDS:
+            row[f"冲高≥{int(th*100)}%"] = round((s >= th).mean() * 100, 1)
+        rows.append(row)
     joint = pd.DataFrame(rows).sort_values(["日线档位下界", "周线HJ分组"], ascending=[False, True])
     joint.to_csv(os.path.join(OUT_DIR, "hj_joint_table.csv"), index=False, encoding="utf-8-sig")
     print(f"联合表：{len(joint)} 行 -> hj_joint_table.csv")
@@ -200,18 +201,21 @@ def main():
     band = mb.groupby(["daily_group", "weekly_group"], observed=True).agg(
         n=("max3", "size"),
         mean=("max3", lambda x: round(x.mean() * 100, 2)),
-        hit5=("max3", lambda x: round((x >= 0.05).mean() * 100, 1)),
-    ).reset_index().rename(columns={"n": "信号数", "mean": "平均最高涨幅", "hit5": "冲高≥5"})
+        **{f"hit{int(th*100)}": ("max3", lambda x, th=th: round((x >= th).mean() * 100, 1))
+           for th in THRESHOLDS},
+    ).reset_index().rename(columns={"n": "信号数", "mean": "平均最高涨幅"})
+    for th in THRESHOLDS:
+        band = band.rename(columns={f"hit{int(th*100)}": f"冲高≥{int(th*100)}%"})
     band.to_csv(os.path.join(OUT_DIR, "hj_joint_band10.csv"), index=False, encoding="utf-8-sig")
     print(f"10 分档联合表：{len(band)} 行 -> hj_joint_band10.csv")
-    pivot = band.pivot(index="daily_group", columns="weekly_group", values="冲高≥5")
+    pivot = band.pivot(index="daily_group", columns="weekly_group", values="冲高≥5%")
     print("\n===== 联合表：日线 HJ10（行）× 周线 HJ10（列），单元格 = 冲高≥5% 概率（%） =====")
     print(pivot.to_string())
 
     # 周线增量：同一日线 10 分档内，周线分组带来的 ≥5% 概率差
     spreads = []
     for dg, g in band.groupby("daily_group", observed=True):
-        vals = g.loc[g["信号数"] >= 200, "冲高≥5"]
+        vals = g.loc[g["信号数"] >= 200, "冲高≥5%"]
         if len(vals) >= 2:
             spreads.append(vals.max() - vals.min())
     if spreads:
