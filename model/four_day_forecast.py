@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """4 日 OHLC 预测（在「HJ 金叉 + DIFF 增大」买入信号上）。
 
 预测内容：信号日 T 收盘买入后，T+1 / T+2 / T+3 / T+4 每天的
@@ -10,7 +10,9 @@
 输出：每个目标相对 T 日收盘价的收益率，乘以 T 日收盘价即得预测价格。
 
 用法：
-  python four_day_forecast.py                 # 扫描数据+训练+量能分析+最新预测
+  python four_day_forecast.py                 # 扫描数据+训练+量能分析+最新预测（默认旧信号）
+  python four_day_forecast.py --signal-mode rise --out-dir output_4day_rise
+                                              # 新信号：T 日 hj10 > T-1 日 hj10 + DIFF 增大
   python four_day_forecast.py --rebuild       # 忽略缓存重新扫描
 """
 from __future__ import annotations
@@ -60,8 +62,10 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-root", default=DEFAULT_ROOT)
     ap.add_argument("--out-dir", default=os.path.join(HERE, "output_4day"))
+    ap.add_argument("--signal-mode", choices=["cross_streak", "rise"], default="cross_streak",
+                    help="cross_streak=旧条件(HJ金叉+K日递降); rise=新条件(HJ10较昨日上升)")
     ap.add_argument("--streak", type=int, default=3,
-                    help="HJ 金叉前要求连续多少天 hj10<hj11（0=不要求）")
+                    help="HJ 金叉前要求连续多少天 hj10<hj11（仅 cross_streak 模式有效，0=不要求）")
     ap.add_argument("--min-date", type=int, default=0, help="样本起始日期，0=不限")
     ap.add_argument("--max-abs-ret", type=float, default=0.35,
                     help="过滤 |T日涨跌幅| 超过该值的脏数据，0.35=35%%")
@@ -112,13 +116,19 @@ def build_dataset(args):
     data_root = args.data_root
     out_dir = args.out_dir
     os.makedirs(out_dir, exist_ok=True)
-    cache = os.path.join(out_dir, f"signals4_K{args.streak}.parquet")
+    if args.signal_mode == "rise":
+        cache = os.path.join(out_dir, "signals4_rise.parquet")
+    else:
+        cache = os.path.join(out_dir, f"signals4_K{args.streak}.parquet")
     if os.path.exists(cache) and not args.rebuild:
         print(f"读取缓存：{cache}")
         return pd.read_parquet(cache)
 
     files = list(iter_stock_files(data_root))
-    print(f"扫描 {len(files)} 个日线文件（信号：金叉前连续 {args.streak} 天 hj10<hj11）...")
+    if args.signal_mode == "rise":
+        print(f"扫描 {len(files)} 个日线文件（新条件：T 日 hj10 > T-1 日 hj10，且 DIFF 增大）...")
+    else:
+        print(f"扫描 {len(files)} 个日线文件（旧条件：金叉 + 前 {args.streak} 天 hj10<hj11，且 DIFF 增大）...")
     t0 = time.time()
     frames = []
     for i, (market, code, path) in enumerate(files):
@@ -129,11 +139,16 @@ def build_dataset(args):
         feats = add_extra_features(feats, df)
         hj10, hj11 = feats["hj10"], feats["hj11"]
         dif = raw_dif(df["close"])
-        signal = (hj10 > hj11) & (hj10.shift(1) <= hj11.shift(1)) & (dif > dif.shift(1))
-        if args.streak > 0:
-            below = hj10 < hj11
-            for k in range(1, args.streak + 1):
-                signal = signal & below.shift(k)
+        if args.signal_mode == "rise":
+            # 新条件：T 日 hj10 比 T-1 日上升（不再要求金叉）
+            signal = (hj10 > hj10.shift(1)) & (dif > dif.shift(1))
+        else:
+            # 旧条件：HJ10 上穿 HJ11（可选金叉前连续 K 天 hj10<hj11）
+            signal = (hj10 > hj11) & (hj10.shift(1) <= hj11.shift(1)) & (dif > dif.shift(1))
+            if args.streak > 0:
+                below = hj10 < hj11
+                for k in range(1, args.streak + 1):
+                    signal = signal & below.shift(k)
         if not signal.any():
             continue
 

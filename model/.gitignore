@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-# 只把代码放进 Git；数据集和模型产物不入库（体积大、可复现）
-data/
+﻿# -*- coding: utf-8 -*-
+# 鍙妸浠ｇ爜鏀捐繘 Git锛涙暟鎹泦鍜屾ā鍨嬩骇鐗╀笉鍏ュ簱锛堜綋绉ぇ銆佸彲澶嶇幇锛?data/
 data_test/
 data_intraday/
 output/
@@ -12,3 +11,5 @@ output_4day/
 __pycache__/
 *.pyc
 output_streak/
+
+output_4day_rise/

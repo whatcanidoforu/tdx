@@ -35,7 +35,7 @@ run.bat four-day --streak 3
 | `train-daily-mtf` | 日级多周期 LightGBM + 量能消融 | `--ablation` `--max-rounds` | `output_daily_mtf/*` |
 | `three-day` | HJ 金叉+DIFF 信号 → 3 日最高点模型 | `--data-root` `--rebuild` `--max-rounds` | `output_3day/*` |
 | `backtest-3day` | 3 日最高点模型回测 | `--date` 或 `--start/--end` `--top` `--save` | 控制台/CSV |
-| `four-day` | K 日递降信号 → 4 日 OHLC MLP | `--streak` `--epochs` `--rebuild` | `output_4day/*` |
+| `four-day` | K 日递降信号 → 4 日 OHLC MLP | `--streak` `--signal-mode` `--epochs` `--rebuild` | `output_4day/*`、`output_4day_rise/*` |
 | `backtest-4day` | 4 日 OHLC 回测（预测?实际） | `--date` 或 `--start/--end` `--top` `--save` | 控制台/CSV |
 | `signals` | K=0~5 信号对比 + 振幅/涨跌幅分析 | `--streaks` `--data-root` | `output_streak/*` |
 | `shadow` | 上/下影线长短影响 | — | `output_4day/shadow_*.csv` |
@@ -75,19 +75,23 @@ run.py train-daily-mtf --ablation
 ### 2.3 信号 + 4 日 OHLC（当前主模型）
 
 ```powershell
-# 默认 K=3 天递降；换 K=1（单信号质量更好）
+# 默认旧信号：K=3 天递降；换 K=1（单信号质量更好）
 run.py four-day --streak 3
 run.py four-day --streak 1 --rebuild
+
+# 新信号：T 日 hj10 > T-1 日 hj10（不再要求金叉），输出到单独目录
+run.py four-day --signal-mode rise --out-dir output_4day_rise --rebuild
 
 # 换数据目录
 run.py four-day --data-root D:\MyTools\new_tdx\vipdoc
 ```
 
 输出：
-- `output_4day/signals4_K3.parquet`（可重建）
-- `output_4day/mlp_4day.pt`
-- `output_4day/predict_4day_YYYYMMDD.csv`
-- `output_4day/metrics_4day.json`
+- `output_4day/signals4_K3.parquet`（旧信号，可重建）
+- `output_4day_rise/signals4_rise.parquet`（新信号）
+- `output_4day/mlp_4day.pt` / `output_4day_rise/mlp_4day.pt`
+- `output_4day*/predict_4day_YYYYMMDD.csv`
+- `output_4day*/metrics_4day.json`
 
 ### 2.4 回测
 
@@ -131,6 +135,7 @@ run.py hj-weekly               # HJ 每 1 分档 + 周线联合
 | `--out-dir` | 大部分命令 | 输出目录 |
 | `--codes` | build-intraday | 股票代码，逗号分隔 |
 | `--streak` | four-day | 金叉前连续 `hj10<hj11` 天数（0~5，默认 3） |
+| `--signal-mode` | four-day | `cross_streak`（旧：金叉+K日递降）或 `rise`（新：HJ10 较昨日上升） |
 | `--epochs` | train-seq、four-day | 训练轮数 |
 | `--max-rounds` | train、three-day、train-daily-mtf | LightGBM 最大轮数 |
 | `--rebuild` | four-day、three-day、signals | 忽略缓存重新扫描 |
@@ -153,7 +158,8 @@ run.py hj-weekly               # HJ 每 1 分档 + 周线联合
 | `output_seq/` | v2 GRU 模型/指标 |
 | `output_daily_mtf/` | v2 日级多周期 LightGBM |
 | `output_3day/` | v3 3 日最高点模型/信号/预测 |
-| `output_4day/` | v4 4 日 OHLC 模型/信号/预测/分析表 |
+| `output_4day/` | v4 4 日 OHLC 模型/信号/预测/分析表（旧信号） |
+| `output_4day_rise/` | v4b 新信号（HJ10 上升）的模型/信号/预测 |
 | `output_streak/` | K 对比与振幅分析 |
 
 > `data*/`、`output*/` 都不入 Git；删掉后可用命令重建。
