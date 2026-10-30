@@ -11,6 +11,23 @@
 > **统一命令入口**：`D:\conda\envs\firstmodel\python.exe run.py <命令> [参数...]`
 > 全部命令、参数、输出见 [COMMANDS.md](COMMANDS.md)。
 
+## 项目导航（先看这里）
+
+> **当前最佳模型：v4 `four_day_forecast.py`（K=3 买入信号 + 4 日 OHLC MLP）**
+> —— T+1 最高价 MAE 1.90%（baseline 2.55%）、IC 0.31；T+1 最低价 1.43%（2.29）、IC 0.35；
+> 16 个 OHLC 目标平均 MAE 3.29%（3.51%）。**开盘价/收盘价方向不可预测**，模型用于"波动区间/止盈止损参考"，不是买卖信号。
+
+| 文档 | 内容 |
+|---|---|
+| [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 最佳模型、版本对比、关键因子、文件地图 |
+| [CHAT_SUMMARY.md](CHAT_SUMMARY.md) | 整个对话的压缩摘要（按阶段） |
+| [COMMANDS.md](COMMANDS.md) | 全部命令、参数、输出目录、FAQ |
+| [FIELDS.md](FIELDS.md) | 字段说明、数据口径、模型目标 |
+| [HJ_TABLES.md](HJ_TABLES.md) | HJ10 日线/周线每 1 分档完整表 |
+
+> README 章节：第 1~9 节是 **v1 全市场日线模型**；第 10 节是 **v2 26 只股票多周期**；
+> 第 11 节是 **v3 信号→3 日最高点**；第 12~13 节是 **v4 4 日 OHLC 与因子分析**。
+
 ---
 
 ## 1. 结论速览
