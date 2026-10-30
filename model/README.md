@@ -7,6 +7,9 @@
 > 分支：`tdx-model`（从 `web` 仓库 `main` 切出）
 > 代码位置：`web/model/`
 > 数据：`D:\MyTools\new_tdx_day`（本地通达信日线，12,218 个文件）
+>
+> **统一命令入口**：`D:\conda\envs\firstmodel\python.exe run.py <命令> [参数...]`
+> 全部命令、参数、输出见 [COMMANDS.md](COMMANDS.md)。
 
 ---
 

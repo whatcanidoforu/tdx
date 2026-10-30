@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """4 日 OHLC 预测（在「HJ 金叉 + DIFF 增大」买入信号上）。
 
 预测内容：信号日 T 收盘买入后，T+1 / T+2 / T+3 / T+4 每天的
@@ -64,9 +64,9 @@ def parse_args():
                     help="HJ 金叉前要求连续多少天 hj10<hj11（0=不要求）")
     ap.add_argument("--min-date", type=int, default=0, help="样本起始日期，0=不限")
     ap.add_argument("--max-abs-ret", type=float, default=0.35,
-                    help="过滤 |T日涨跌幅| 超过该值的脏数据，0.35=35%")
+                    help="过滤 |T日涨跌幅| 超过该值的脏数据，0.35=35%%")
     ap.add_argument("--max-amp", type=float, default=0.5,
-                    help="过滤 T 日振幅超过该值的脏数据，0.5=50%")
+                    help="过滤 T 日振幅超过该值的脏数据，0.5=50%%")
     ap.add_argument("--valid-start", type=int, default=20250101)
     ap.add_argument("--test-start", type=int, default=20260101)
     ap.add_argument("--epochs", type=int, default=40)
@@ -388,3 +388,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
