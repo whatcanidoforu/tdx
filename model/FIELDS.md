@@ -213,27 +213,31 @@ D:\conda\envs\firstmodel\python.exe four_day_forecast.py
 
 ---
 
-## 9. 回测（预测?实际对照）
+## 9. 回测（开/高/低/收 + 预测实实际）
 
-`backtest_4day.py` 会把每个字段输出成 **`预测价?实际价`** 的格式，例如：
+`backtest_4day.py` 使用**真实价格**，每个字段输出成
+`开/高/低/收 + 预测实实际(实际相对前收涨跌幅%)`，例如：
 
 ```
-20.24?20.45      # T+1 开盘：模型预测 20.24，实际开盘 20.45
-21.18?21.01      # T+1 最高：模型预测 21.18，实际最高 21.01
+开38.21实35.88(-5.7%)   # T+1 开盘：预测 38.21，实际 35.88（相对 T 日收盘 38.03 跌 5.7%）
+高41.16实37.66(-1.0%)   # T+1 最高
+低36.17实35.36(-7.0%)   # T+1 最低
+收38.71实35.70(-6.1%)   # T+1 收盘
 ```
 
+T+2 及以后的百分比相对**前一日实际收盘**；实际值未更新时显示 `开38.50实待更新`。
 覆盖 T+1 ~ T+4 每天的开盘/最高/最低/收盘（16 列），另含 `T_ret_pct`（T 日涨跌幅）、
-`pred_max_high_4d_ret_pct`（预测 4 日最高涨幅）。
+`pred_max_high_4d_ret_pct`（预测 4 日最高涨幅）；默认剔除 T 日收盘涨停。
 
 ```powershell
-# 单日回测（样本外，2026 年以后）
-D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --top 10
+# 单日回测（自动保存 output_4day/backtest_4day_YYYYMMDD.csv）
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20260615 --top 10
 
-# 保存明细
-D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --save bt.csv
+# 自定义保存路径
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20260615 --save bt.csv
 
 # 区间回测（只输出误差汇总）
-D:\conda\envs\firstmodel\python.exe backtest_4day.py --start 20260901 --end 20261027
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --start 20260901 --end 20261027
 ```
 
 注意：模型训练集 `<2025`，2025 是验证集，**2026 年之后才是样本外**；回测 2024 年以前会偏乐观。

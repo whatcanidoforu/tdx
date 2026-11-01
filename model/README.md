@@ -600,24 +600,31 @@ predict_4day_20261028.csv  # 最新信号日 4 日 OHLC 预测
 2. 开盘/收盘方向不可预测，最高/最低价用于止盈止损参考。
 3. 未考虑手续费、滑点、涨停买不进；不构成投资建议。
 
-### 12.8 回测：预测?实际
+### 12.8 回测：开/高/低/收 + 预测实实际(涨跌幅%)
 
-新增 `backtest_4day.py`，把每个 OHLC 字段输出成 **`预测价?实际价`**：
+`backtest_4day.py` 使用**真实价格**，每个字段输出成
+`开/高/低/收 + 预测实实际(实际相对前收涨跌幅%)`：
 
 ```
-20.24?20.45     # T+1 开盘：预测 20.24，实际 20.45
-21.18?21.01     # T+1 最高：预测 21.18，实际 21.01
+开38.21实35.88(-5.7%)   # T+1 开盘：预测 38.21，实际 35.88（相对 T 日收盘 38.03 跌 5.7%）
+高41.16实37.66(-1.0%)   # T+1 最高
+低36.17实35.36(-7.0%)   # T+1 最低
+收38.71实35.70(-6.1%)   # T+1 收盘
 ```
+
+- T+2 及以后的百分比，相对**前一日实际收盘**；
+- 实际值未更新时显示 `开38.50实待更新` 这样的格式；
+- 默认剔除 T 日收盘涨停（买不进）。
 
 ```powershell
-# 单日回测（2026 年以后才是样本外）
-D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --top 10
+# 单日回测（自动保存 output_4day/backtest_4day_YYYYMMDD.csv）
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20260615 --top 10
 
-# 保存明细（16 列 + T_ret_pct）
-D:\conda\envs\firstmodel\python.exe backtest_4day.py --date 20260615 --save bt.csv
+# 自定义保存路径
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20260615 --save bt.csv
 
 # 区间回测（只输出误差汇总）
-D:\conda\envs\firstmodel\python.exe backtest_4day.py --start 20260901 --end 20261027
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --start 20260901 --end 20261027
 ```
 
 示例：2026-06-15 共 790 只 K=3 信号，16 个目标平均 MAE 3.56%（baseline 3.80%）；
@@ -1343,9 +1350,9 @@ D:\conda\envs\firstmodel\python.exe run.py four-day --streak 3
 - 当日信号 **170 只**；剔除 **T 日收盘涨停 15 只**；可买入 **155 只**。
 - **实际值只覆盖 73 只**（T+1=10/29、T+2=10/30）；其余显示"待更新"，因为 vipdoc 只有部分股票更新到 10/30，且 T+3/T+4 尚未到。
 - 文件：`output_4day/backtest_4day_20261028.csv`。
-- **CSV 格式**：以 T 日收盘价为 **100** 归一化；收盘列显示 `收预测实实际(实际日涨跌幅%)`，
-  例如 `收100.0实110.0(+10.0%)`；T+2 的百分比是相对 T+1 实际收盘的日涨跌幅；
-  开盘/最高/最低列显示 `预测?实际`；未更新显示 `待更新`；`T_close_norm=100` 便于对照。
+- **CSV 格式**：使用**真实价格**（不再以 T 日收盘=100 归一化）；每列格式为
+  `开/高/低/收 + 预测实实际(实际相对前收涨跌幅%)`，例如 `开38.21实35.88(-5.7%)`；
+  T+2 及以后的百分比相对前一日实际收盘；未更新显示 `待更新`。
 
 **73 只可核对样本的误差：**
 

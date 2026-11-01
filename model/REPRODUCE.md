@@ -30,7 +30,7 @@ $py = "D:\conda\envs\firstmodel\python.exe"
 # 1) 扫描信号 + 训练 + 预测最新一日（约 5 分钟，首次）
 & $py run.py four-day --streak 3 --rebuild
 
-# 2) 回测某一天（约 10 秒；T 日收盘=100，明细自动存到 output_4day/backtest_4day_YYYYMMDD.csv）
+# 2) 回测某一天（约 10 秒；真实价格，明细自动存到 output_4day/backtest_4day_YYYYMMDD.csv）
 & $py run.py backtest-4day --date 20260615
 ```
 
