@@ -1,15 +1,21 @@
-﻿# -*- coding: utf-8 -*-
-# 鍙妸浠ｇ爜鏀捐繘 Git锛涙暟鎹泦鍜屾ā鍨嬩骇鐗╀笉鍏ュ簱锛堜綋绉ぇ銆佸彲澶嶇幇锛?data/
+# 只把代码/文档放进 Git；数据集、模型产物、缓存不入库（体积大、可用脚本重建）
+# 注意：本文件位于 model/ 目录，规则只对本目录及其子目录生效。
+
+# ---- 数据 ----
+data/
 data_test/
 data_intraday/
+
+# ---- 模型/预测/分析产物 ----
 output/
 output_test/
 output_seq/
 output_daily_mtf/
 output_3day/
 output_4day/
-__pycache__/
-*.pyc
+output_4day_rise/
 output_streak/
 
-output_4day_rise/
+# ---- Python 缓存 ----
+__pycache__/
+*.pyc
