@@ -19,6 +19,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| [REPRODUCE.md](REPRODUCE.md) | **从头重跑的最短指令清单（先看这个）** |
 | [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) | 最佳模型、版本对比、关键因子、文件地图 |
 | [CHAT_SUMMARY.md](CHAT_SUMMARY.md) | 整个对话的压缩摘要（按阶段） |
 | [COMMANDS.md](COMMANDS.md) | 全部命令、参数、输出目录、FAQ |
