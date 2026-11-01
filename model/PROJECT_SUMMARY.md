@@ -120,7 +120,7 @@ v2（5/15/30 分钟模型）数据只有 448 天，GRU 过拟合，**不推荐�
 | 文件 | 作用 |
 |---|---|
 | `four_day_forecast.py` | 信号扫描 + 4 日 OHLC MLP 训练 + 最新预测（`--signal-mode rise` 可切新信号） |
-| `backtest_4day.py` | 4 日 OHLC 回测（开/高/低/收拆开：预测价/预测%/实际价/实际%） |
+| `backtest_4day.py` | 4 日 OHLC 回测（每字段拆 4 列：预测价/预测%/实际价/实际%） |
 | `three_day_high.py` / `backtest_3day.py` | v3：3 日最高点模型（可保留对照） |
 
 ### 因子分析

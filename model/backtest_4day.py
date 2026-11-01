@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""4 日 OHLC 模型回测：把「预测值?实际值」并排输出，方便逐项核对。
+"""4 日 OHLC 模型回测：每个字段拆成 预测价/预测%/实际价/实际% 四列。
 
+- 列名：`T+1_open_pred`（预测价）、`T+1_open_pred_pct`（预测%）、
+  `T+1_open_actual`（实际价）、`T+1_open_actual_pct`（实际%）；
+  high/low/close、T+1~T+4 同理；
 - 默认剔除 T 日收盘涨停（买不进）；
-- 支持"部分实际值"：如果 T+1/T+2 已有数据、T+3/T+4 还没更新，会显示"待更新"；
-- 例如 T+1_open 显示 `20.24?20.45` 表示预测 20.24、实际 20.45。
+- 支持"部分实际值"：T+3/T+4 还没更新时，actual 列为空。
 
 用法：
   python backtest_4day.py --date 20261028
@@ -89,7 +91,6 @@ def pair_table(df, pred, actual, top_n=0, save=""):
         "T_ret_pct": (df["ret1"].values * 100).round(2),
     })
     base = df["buy_close"].values.astype(float)
-    prefix = {"open": "开", "high": "高", "low": "低", "close": "收"}
     high_pred = []
     for h_idx, h in enumerate(HORIZONS):
         # 前一日的预测收盘 / 实际收盘（真实价格）；T+1 都用 T 日收盘
@@ -107,15 +108,12 @@ def pair_table(df, pred, actual, top_n=0, save=""):
             a_px = base * (1.0 + actual[:, j])
             if f == "high":
                 high_pred.append(p_px)
-            vals = []
-            for p, a, pp, ap in zip(p_px, a_px, p_prev, a_prev):
-                pct_p = (p / pp - 1.0) * 100.0   # 预测值相对「前一日预测收盘」的涨跌幅
-                if np.isfinite(a):
-                    pct_a = (a / ap - 1.0) * 100.0   # 实际值相对「前一日实际收盘」的涨跌幅
-                    vals.append(f"{prefix[f]}， {p:.2f}， {pct_p:+.1f}%， 实， {a:.2f}， {pct_a:+.1f}%")
-                else:
-                    vals.append(f"{prefix[f]}， {p:.2f}， {pct_p:+.1f}%， 实， 待更新")
-            out[f"T+{h}_{f}"] = vals
+            pct_p = (p_px / p_prev - 1.0) * 100.0   # 预测值相对「前一日预测收盘」
+            pct_a = (a_px / a_prev - 1.0) * 100.0   # 实际值相对「前一日实际收盘」
+            out[f"T+{h}_{f}_pred"] = np.round(p_px, 2)
+            out[f"T+{h}_{f}_pred_pct"] = np.round(pct_p, 2)
+            out[f"T+{h}_{f}_actual"] = np.where(np.isfinite(a_px), np.round(a_px, 2), np.nan)
+            out[f"T+{h}_{f}_actual_pct"] = np.where(np.isfinite(a_px), np.round(pct_a, 2), np.nan)
     out["pred_max_high_4d_ret_pct"] = (
         np.max(np.vstack(high_pred), axis=0) / df["buy_close"].values - 1.0
     ) * 100
@@ -175,14 +173,16 @@ def main():
         all_table = pair_table(day, pred, actual, top_for_save, save_path)
         print(f"\n===== {args.date} 回测（{period_note(args.date)}）=====")
         print(f"可买入信号 {len(day)} 只；剔除 T 日涨停 {excluded} 只；"
-              f"表格：真实价格，格式 开/高/低/收， 预测价， 预测%， 实， 实际价， 实际%")
+              f"CSV 每字段拆成 4 列：_pred 预测价 / _pred_pct 预测% / _actual 实际价 / _actual_pct 实际%")
         out = all_table.head(args.top) if args.top > 0 else all_table
         print(f"\n全量明细（{len(all_table)} 行）已保存：{save_path}")
         print(f"下面按预测 4 日最高涨幅排序，展示前 {len(out)} 行：")
         show_cols = ["stock_code", "market", "buy_close", "T_ret_pct",
-                     "T+1_open", "T+1_high", "T+1_low", "T+1_close",
-                     "T+2_open", "T+2_high", "T+2_low", "T+2_close",
-                     "T+3_open", "T+3_high", "T+3_low", "T+3_close"]
+                     "T+1_open_pred", "T+1_open_actual",
+                     "T+1_high_pred", "T+1_high_actual",
+                     "T+1_low_pred", "T+1_low_actual",
+                     "T+1_close_pred", "T+1_close_actual",
+                     "T+2_close_pred", "T+2_close_actual"]
         print(out[show_cols].to_string(index=False))
         print("\n各目标误差（只统计已有实际值的 T+1/T+2...）：")
         print_metrics(pred, actual)
