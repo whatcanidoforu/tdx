@@ -33,7 +33,8 @@ def parse_args():
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=0)
     ap.add_argument("--top", type=int, default=10)
-    ap.add_argument("--save", default="")
+    ap.add_argument("--save", default="",
+                    help="保存明细 CSV；不填则自动存到 <model-dir>/backtest_4day_<日期>.csv")
     ap.add_argument("--keep-limit-up", action="store_true", help="保留 T 日收盘涨停（默认剔除）")
     ap.add_argument("--complete-only", action="store_true", help="只保留 T+1~T+4 实际值齐全的信号")
     return ap.parse_args()
@@ -152,19 +153,22 @@ def main():
             print(f"{args.date} 没有可用信号")
             return
         pred, actual = predict(day, model, ckpt)
+        # 明细 CSV：--save 没给时，默认存到模型目录，避免"跑完不知道文件在哪"
+        save_path = args.save or os.path.join(args.model_dir, f"backtest_4day_{args.date}.csv")
+        top_for_save = 0  # 保存全量明细，不在控制台截断
+        all_table = pair_table(day, pred, actual, top_for_save, save_path)
         print(f"\n===== {args.date} 回测（{period_note(args.date)}）=====")
         print(f"可买入信号 {len(day)} 只；剔除 T 日涨停 {excluded} 只；表格格式：预测价?实际价")
-        out = pair_table(day, pred, actual, args.top, args.save)
+        out = all_table.head(args.top) if args.top > 0 else all_table
+        print(f"\n全量明细（{len(all_table)} 行）已保存：{save_path}")
+        print(f"下面按预测 4 日最高涨幅排序，展示前 {len(out)} 行：")
         show_cols = ["stock_code", "market", "buy_close", "T_ret_pct",
                      "T+1_open", "T+1_high", "T+1_low", "T+1_close",
                      "T+2_open", "T+2_high", "T+2_low", "T+2_close",
                      "T+3_open", "T+3_high", "T+3_low", "T+3_close"]
         print(out[show_cols].to_string(index=False))
-        print(f"\n按预测 4 日最高涨幅排序前 {args.top}；完整 16 列见保存的 CSV。")
         print("\n各目标误差（只统计已有实际值的 T+1/T+2...）：")
         print_metrics(pred, actual)
-        if args.save:
-            print(f"\n明细已保存：{args.save}")
     elif args.start and args.end:
         sub = sig[(sig["date"] >= args.start) & (sig["date"] <= args.end) & sig["has_targets"]].reset_index(drop=True)
         if not args.keep_limit_up:

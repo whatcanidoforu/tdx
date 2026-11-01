@@ -96,8 +96,11 @@ run.py four-day --data-root D:\MyTools\new_tdx\vipdoc
 ### 2.4 回测
 
 ```powershell
-# 单日：预测?实际（默认剔除 T 日收盘涨停；部分数据未更新会显示"待更新"）
+# 单日：预测?实际（默认剔除 T 日收盘涨停；明细自动存到 <model-dir>/backtest_4day_YYYYMMDD.csv）
 run.py backtest-4day --date 20260615 --top 10
+run.py backtest-4day --date 20261028
+
+# 自定义保存路径
 run.py backtest-4day --date 20261028 --save output_4day/bt_20261028.csv
 
 # 只看 T+1~T+4 实际值齐全的信号
