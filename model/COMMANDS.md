@@ -96,7 +96,8 @@ run.py four-day --data-root D:\MyTools\new_tdx\vipdoc
 ### 2.4 回测
 
 ```powershell
-# 单日：预测?实际（默认剔除 T 日收盘涨停；明细自动存到 <model-dir>/backtest_4day_YYYYMMDD.csv）
+# 单日：T 日收盘价归一化为 100；收盘列格式 收预测实实际(实际日涨跌幅%)
+# 默认剔除 T 日收盘涨停；明细自动存到 <model-dir>/backtest_4day_YYYYMMDD.csv
 run.py backtest-4day --date 20260615 --top 10
 run.py backtest-4day --date 20261028
 

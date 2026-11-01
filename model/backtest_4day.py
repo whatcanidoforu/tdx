@@ -86,19 +86,36 @@ def pair_table(df, pred, actual, top_n=0, save=""):
         "market": df["market"].values,
         "signal_date": df["date"].values,
         "buy_close": df["buy_close"].values,
+        "T_close_norm": 100.0,
         "T_ret_pct": (df["ret1"].values * 100).round(2),
     })
+    base = df["buy_close"].values.astype(float)
     high_pred = []
     for h_idx, h in enumerate(HORIZONS):
+        # 前一日实际收盘（归一化到 T=100）；T+1 用 T 日=100
+        if h_idx == 0:
+            prev_actual = np.full(len(base), 100.0)
+        else:
+            prev_ret = actual[:, (h_idx - 1) * 4 + 3]
+            prev_actual = np.where(np.isfinite(prev_ret), (1.0 + prev_ret) * 100.0, 100.0)
         for f_idx, f in enumerate(FIELDS):
             j = h_idx * 4 + f_idx
-            p_px = df["buy_close"].values * (1.0 + pred[:, j])
-            a_px = df["buy_close"].values * (1.0 + actual[:, j])
+            p_px = base * (1.0 + pred[:, j])
+            a_px = base * (1.0 + actual[:, j])
             if f == "high":
                 high_pred.append(p_px)
+            p_norm = p_px / base * 100.0
+            a_norm = a_px / base * 100.0
             vals = []
-            for p, a in zip(p_px, a_px):
-                vals.append(f"{p:.2f}?{a:.2f}" if np.isfinite(a) else f"{p:.2f}?待更新")
+            for p, a, pa in zip(p_norm, a_norm, prev_actual):
+                if f == "close":
+                    if np.isfinite(a):
+                        chg = (a / pa - 1.0) * 100.0
+                        vals.append(f"收{p:.1f}实{a:.1f}({chg:+.1f}%)")
+                    else:
+                        vals.append(f"收{p:.1f}实待更新")
+                else:
+                    vals.append(f"{p:.1f}?{a:.1f}" if np.isfinite(a) else f"{p:.1f}?待更新")
             out[f"T+{h}_{f}"] = vals
     out["pred_max_high_4d_ret_pct"] = (
         np.max(np.vstack(high_pred), axis=0) / df["buy_close"].values - 1.0
@@ -158,7 +175,8 @@ def main():
         top_for_save = 0  # 保存全量明细，不在控制台截断
         all_table = pair_table(day, pred, actual, top_for_save, save_path)
         print(f"\n===== {args.date} 回测（{period_note(args.date)}）=====")
-        print(f"可买入信号 {len(day)} 只；剔除 T 日涨停 {excluded} 只；表格格式：预测价?实际价")
+        print(f"可买入信号 {len(day)} 只；剔除 T 日涨停 {excluded} 只；"
+              f"表格：T 日收盘=100，收盘列=收预测实实际(实际日涨跌幅%)")
         out = all_table.head(args.top) if args.top > 0 else all_table
         print(f"\n全量明细（{len(all_table)} 行）已保存：{save_path}")
         print(f"下面按预测 4 日最高涨幅排序，展示前 {len(out)} 行：")
