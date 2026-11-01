@@ -36,7 +36,7 @@ run.bat four-day --streak 3
 | `three-day` | HJ 金叉+DIFF 信号 → 3 日最高点模型 | `--data-root` `--rebuild` `--max-rounds` | `output_3day/*` |
 | `backtest-3day` | 3 日最高点模型回测 | `--date` 或 `--start/--end` `--top` `--save` | 控制台/CSV |
 | `four-day` | K 日递降信号 → 4 日 OHLC MLP | `--streak` `--signal-mode` `--epochs` `--rebuild` | `output_4day/*`、`output_4day_rise/*` |
-| `backtest-4day` | 4 日 OHLC 回测（开/高/低/收 + 预测实实际） | `--date` 或 `--start/--end` `--top` `--save` `--keep-limit-up` `--complete-only` | 控制台/CSV |
+| `backtest-4day` | 4 日 OHLC 回测（开/高/低/收拆开：预测价/预测%/实际价/实际%） | `--date` 或 `--start/--end` `--top` `--save` `--keep-limit-up` `--complete-only` | 控制台/CSV |
 | `signals` | K=0~5 信号对比 + 振幅/涨跌幅分析 | `--streaks` `--data-root` | `output_streak/*` |
 | `shadow` | 上/下影线长短影响 | — | `output_4day/shadow_*.csv` |
 | `gap-return` | 高开/低开、T 日涨跌幅影响 | — | `output_4day/gap_*.csv` |
@@ -96,7 +96,7 @@ run.py four-day --data-root D:\MyTools\new_tdx\vipdoc
 ### 2.4 回测
 
 ```powershell
-# 单日：真实价格；每列格式 开/高/低/收 + 预测实实际(实际相对前收涨跌幅%)
+# 单日：真实价格；每列格式 开/高/低/收， 预测价， 预测%， 实， 实际价， 实际%
 # 默认剔除 T 日收盘涨停；明细自动存到 <model-dir>/backtest_4day_YYYYMMDD.csv
 run.py backtest-4day --date 20260615 --top 10
 run.py backtest-4day --date 20261028

@@ -36,7 +36,7 @@ COMMANDS = {
 
     # ===== v4：K 日递降 + 4 日 OHLC =====
     "four-day": ("four_day_forecast.py", "信号 + 4 日 OHLC 预测（MLP，默认 K=3）"),
-    "backtest-4day": ("backtest_4day.py", "回测 4 日 OHLC（开/高/低/收 + 预测实实际）"),
+    "backtest-4day": ("backtest_4day.py", "回测 4 日 OHLC（开/高/低/收拆开：预测价/预测%/实际价/实际%）"),
 
     # ===== 因子分析 =====
     "signals": ("signal_streak_analysis.py", "K=0~5 信号对比 + 振幅/涨跌幅分析"),
