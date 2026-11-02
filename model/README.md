@@ -1392,5 +1392,39 @@ D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20261028 --save 
 
 > `backtest_4day.py` 新增：默认剔除 T 日收盘涨停；支持部分实际值（`--complete-only` 可只看 T+1~T+4 全齐的信号）。
 
+### 15.4 前端可视化（新增回测页）
+
+前端 `web/src` 新增 `📊 回测分析` 页面（顶部导航切换），读取
+`web/src/assets/backtest/backtest_4day_YYYYMMDD.csv`，自动按日期生成切换按钮。
+
+页面内容：
+- 5 个概览卡：可买入信号、有实际值、T+1 最高 MAE、高估比例、平均预测 4 日最高；
+- 左图：选中个股的**最高/收盘**预测 vs 实际路径（含买入价参考线）；
+- 右图：全部股票的 **T+1 最高预测 vs 实际**散点（对角线为完美预测）；
+- 明细表：代码/市场/买入价/T 日涨%/T+1 高低收/误差/预测 4 日最高，点击行切换个股图。
+
+运行：
+
+```powershell
+cd D:\MyTools\zlf\dsh-tdx\web
+npm run dev
+# 打开 http://localhost:5173/#backtest
+# 指定日期：http://localhost:5173/?date=20261028#backtest
+
+# 生产构建
+npm run build
+```
+
+新增日期只需把新的回测 CSV 复制到 `web/src/assets/backtest/`：
+
+```powershell
+cd D:\MyTools\zlf\dsh-tdx\web
+D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20261030
+Copy-Item model\output_4day\backtest_4day_20261030.csv src\assets\backtest\ -Force
+npm run build
+```
+
+> 页面用 `import.meta.glob` 自动发现 CSV，不需要改代码；dev 模式支持热更新。
+
 
 

@@ -2,9 +2,19 @@
   <div class="app">
     <header class="app-header">
       <h1 class="app-title">📈 TDX 通达信行情可视化</h1>
-      <span class="app-version">v1.0</span>
+      <nav class="app-nav">
+        <button
+          :class="['app-nav-btn', { active: activeView === 'chart' }]"
+          @click="activeView = 'chart'"
+        >📈 行情图</button>
+        <button
+          :class="['app-nav-btn', { active: activeView === 'backtest' }]"
+          @click="activeView = 'backtest'"
+        >📊 回测分析</button>
+      </nav>
+      <span class="app-version">v1.1</span>
     </header>
-    <div class="app-body">
+    <div v-if="activeView === 'chart'" class="app-body">
       <aside class="sidebar">
         <FileSelector
           :filePath="filePath"
@@ -45,6 +55,7 @@
         </template>
       </main>
     </div>
+    <BacktestView v-else />
   </div>
 </template>
 
@@ -63,7 +74,14 @@ import KdjChart from './components/KdjChart.vue';
 import BollChart from './components/BollChart.vue';
 import HjChart from './components/HjChart.vue';
 import DataTable from './components/DataTable.vue';
+import BacktestView from './components/BacktestView.vue';
 
+const initialView = window.location.hash === '#backtest' ? 'backtest' : 'chart';
+const activeView = ref(initialView);
+watch(activeView, (v) => {
+  const hash = v === 'backtest' ? '#backtest' : '#';
+  if (window.location.hash !== hash) history.replaceState(null, '', hash);
+});
 const filePath = ref('');
 const chartData = ref(null);
 const summary = ref(null);
@@ -251,6 +269,33 @@ body {
   font-size: 12px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+.app-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.app-nav-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.app-nav-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.app-nav-btn.active {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+  background: rgba(88, 166, 255, 0.08);
 }
 
 .app-body {
