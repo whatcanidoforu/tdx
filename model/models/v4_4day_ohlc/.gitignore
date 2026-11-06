@@ -1,0 +1,5 @@
+output_4day/
+output_4day_rise/
+output_streak/
+__pycache__/
+*.pyc

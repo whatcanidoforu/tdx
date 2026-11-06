@@ -1,21 +1,9 @@
 # 只把代码/文档放进 Git；数据集、模型产物、缓存不入库（体积大、可用脚本重建）
-# 注意：本文件位于 model/ 目录，规则只对本目录及其子目录生效。
+# 每个模型目录还有自己的 .gitignore，规则更细。
 
-# ---- 数据 ----
-data/
-data_test/
-data_intraday/
-
-# ---- 模型/预测/分析产物 ----
-output/
-output_test/
-output_seq/
-output_daily_mtf/
-output_3day/
-output_4day/
-output_4day_rise/
-output_streak/
-
-# ---- Python 缓存 ----
 __pycache__/
 *.pyc
+
+# 各模型的数据/产物
+models/*/data*/
+models/*/output*/
