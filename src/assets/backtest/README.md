@@ -6,15 +6,16 @@
 ## 更新数据
 
 ```powershell
-cd D:\MyTools\zlf\dsh-tdx\web
+cd D:\MyTools\zlf\dsh-tdx\web\model\models\v4_4day_ohlc
 
-# 1) 用模型生成某天回测明细（会自动存到 model/output_4day/）
+# 1) 用模型生成某天回测明细（会自动存到本目录的 output_4day/）
 D:\conda\envs\firstmodel\python.exe run.py backtest-4day --date 20261030
 
 # 2) 复制到前端资源目录
-Copy-Item model\output_4day\backtest_4day_20261030.csv src\assets\backtest\ -Force
+Copy-Item output_4day\backtest_4day_20261030.csv D:\MyTools\zlf\dsh-tdx\web\src\assets\backtest\ -Force
 
 # 3) dev 模式会自动热更新；生产构建执行
+cd D:\MyTools\zlf\dsh-tdx\web
 npm run build
 ```
 
