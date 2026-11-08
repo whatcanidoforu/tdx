@@ -74,6 +74,7 @@ python run.py four-day-rise --rebuild
 | `hj_weekly_analysis.py` | HJ10 每 1 分档 + 周线联合 |
 | `features.py` / `tdx_io.py` | 日线特征 / 通达信读取 |
 | `run.py` | 统一命令入口 |
+| `hj_pivot/` | **HJ10 底背离（15 分钟）参数敏感性回测**，见 [hj_pivot/README.md](hj_pivot/README.md) |
 
 ## 文档
 
