@@ -1,4 +1,4 @@
-/**
+﻿/**
  * HJ10 底背离检测 —— 单元测试。
  *
  * 覆盖两个真实案例：
@@ -7,7 +7,7 @@
  */
 import { findTurnPairs, buildDivergenceChains, detectDivergence } from './hj-pivot-scan.js';
 import { readLc5As15Min } from './lc5-reader.js';
-import { computeHJ } from '../../../src/formulas/hj.js';
+import { computeHJ } from '../src/formulas/hj.js';
 
 let pass = 0;
 let fail = 0;

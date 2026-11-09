@@ -1,4 +1,4 @@
-/**
+﻿/**
  * HJ10 底背离检测 —— 15 分钟级别（按用户 603578 例子定标）。
  *
  * 拐点定义（与用户口径一致）：
@@ -25,7 +25,7 @@
  * @module dsh-tdx/app/hj-pivot-scan
  */
 
-import { computeHJ } from '../../../src/formulas/hj.js';
+import { computeHJ } from '../src/formulas/hj.js';
 import { computeMacd } from './macd.js';
 
 /**
