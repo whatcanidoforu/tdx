@@ -16,8 +16,11 @@
 import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** 每条记录字节数。 */
+/** 每条记录字节数（5 分钟线）。 */
 const RECORD_BYTES = 32;
+
+/** 每条记录字节数（日线）。 */
+const RECORD_BYTES_DAY = 32;
 
 /**
  * 解码一条 .lc5 记录。
@@ -66,12 +69,14 @@ export function readLc5(file) {
 }
 
 /**
- * 把 5 分钟线聚合为 15 分钟线（每 3 根合并，按自然日分组）。
+ * 把 5 分钟线聚合为任意更高周期（按自然日分组，每 N 根合并成 1 根）。
  *
  * @param {object[]} bars5
+ * @param {number} groupSize 合并根数：1=5分钟，3=15分钟，6=30分钟
  * @returns {{date: string, time: string, open: number, high: number, low: number, close: number, amount: number, volume: number}[]}
  */
-export function mergeTo15Min(bars5) {
+export function mergeBars(bars5, groupSize = 3) {
+  const size = Math.max(1, Math.floor(groupSize));
   const byDay = new Map();
   for (const bar of bars5) {
     const key = `${bar.year}${String(bar.month).padStart(2, '0')}${String(bar.day).padStart(2, '0')}`;
@@ -85,22 +90,50 @@ export function mergeTo15Min(bars5) {
 
   const out = [];
   for (const [date, dayBars] of byDay) {
-    for (let index = 0; index + 2 < dayBars.length; index += 3) {
-      const trio = [dayBars[index], dayBars[index + 1], dayBars[index + 2]];
-      const last = trio[2];
+    for (let index = 0; index + size - 1 < dayBars.length; index += size) {
+      const group = dayBars.slice(index, index + size);
+      const last = group[group.length - 1];
+      let high = group[0].high;
+      let low = group[0].low;
+      let amount = 0;
+      let volume = 0;
+      for (const item of group) {
+        if (item.high > high) high = item.high;
+        if (item.low < low) low = item.low;
+        amount += item.amount;
+        volume += item.volume;
+      }
       out.push({
         date,
         time: `${String(last.hour).padStart(2, '0')}:${String(last.minute).padStart(2, '0')}`,
-        open: trio[0].open,
-        high: Math.max(trio[0].high, trio[1].high, trio[2].high),
-        low: Math.min(trio[0].low, trio[1].low, trio[2].low),
+        open: group[0].open,
+        high,
+        low,
         close: last.close,
-        amount: trio[0].amount + trio[1].amount + trio[2].amount,
-        volume: trio[0].volume + trio[1].volume + trio[2].volume,
+        amount,
+        volume,
       });
     }
   }
   return out;
+}
+
+/**
+ * 把 5 分钟线聚合为 15 分钟线（每 3 根合并）。
+ * @param {object[]} bars5
+ */
+export function mergeTo15Min(bars5) {
+  return mergeBars(bars5, 3);
+}
+
+/**
+ * 按周期读取本地 5 分钟源文件，返回对应级别的 K 线。
+ *
+ * @param {string} file `.lc5` 文件路径
+ * @param {number} groupSize 合并根数（1=5分钟，3=15分钟，6=30分钟）
+ */
+export function readLc5As(file, groupSize) {
+  return mergeBars(readLc5(file), groupSize);
 }
 
 /**
@@ -109,6 +142,53 @@ export function mergeTo15Min(bars5) {
  */
 export function readLc5As15Min(file) {
   return mergeTo15Min(readLc5(file));
+}
+
+/* ------------------------------------------------------------ 日线 .day */
+
+/**
+ * 读取通达信日线 `.day` 文件。
+ *
+ * 每条记录 32 字节：
+ *   uint32 日期 YYYYMMDD
+ *   uint32 开盘价 ×100
+ *   uint32 最高价 ×100
+ *   uint32 最低价 ×100
+ *   uint32 收盘价 ×100
+ *   float32 成交额（元）
+ *   uint32 成交量
+ *   uint32 保留
+ *
+ * @param {string} file
+ * @returns {{date: string, time: string, open: number, high: number, low: number, close: number, amount: number, volume: number}[]}
+ */
+export function readDayFile(file) {
+  const size = statSync(file).size;
+  const count = Math.floor(size / RECORD_BYTES_DAY);
+  if (count === 0) return [];
+  const buffer = Buffer.alloc(count * RECORD_BYTES_DAY);
+  const fd = openSync(file, 'r');
+  try {
+    readSync(fd, buffer, 0, count * RECORD_BYTES_DAY, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const bars = new Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const offset = index * RECORD_BYTES_DAY;
+    const dateInt = buffer.readUInt32LE(offset);
+    bars[index] = {
+      date: String(dateInt),
+      time: '15:00',
+      open: buffer.readUInt32LE(offset + 4) / 100,
+      high: buffer.readUInt32LE(offset + 8) / 100,
+      low: buffer.readUInt32LE(offset + 12) / 100,
+      close: buffer.readUInt32LE(offset + 16) / 100,
+      amount: buffer.readFloatLE(offset + 20),
+      volume: buffer.readUInt32LE(offset + 24),
+    };
+  }
+  return bars;
 }
 
 /** A 股代码判定（按 .lc5 文件名）。 */
@@ -128,6 +208,12 @@ export function isAShareFile(market, fileName) {
  * @param {string} market `sh` / `sz` / `bj`
  * @returns {{code: string, market: string, file: string}[]}
  */
+/**
+ * 枚举某市场所有 .lc5 文件（不区分股票/ETF，交由调用方过滤）。
+ * @param {string} tdxHome
+ * @param {string} market
+ * @returns {{code: string, market: string, file: string}[]}
+ */
 export function listLc5Files(tdxHome, market) {
   const dir = join(tdxHome, 'vipdoc', market, 'fzline');
   let files;
@@ -139,8 +225,8 @@ export function listLc5Files(tdxHome, market) {
   const out = [];
   for (const fileName of files) {
     if (!fileName.endsWith('.lc5')) continue;
-    if (!isAShareFile(market, fileName)) continue;
     const match = /^[a-z]{2}(\d{6})\.lc5$/i.exec(fileName);
+    if (!match) continue;
     out.push({ market, code: match[1], file: join(dir, fileName) });
   }
   return out;

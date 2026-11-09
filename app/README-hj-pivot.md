@@ -1,6 +1,87 @@
-﻿# HJ10 底背离扫描（15 分钟级别）
+# HJ10 底背离扫描（多周期）
 
-在 15 分钟周期上，找 **HJ10 连续出现 ≥2 个低于 25 的低点，且后一个低点的 HJ10 抬高、收盘价却创新低** 的股票，并记录每个低点和拐点的日期。
+在 **5 分钟 / 15 分钟 / 30 分钟 / 日线** 上，找 **HJ10 连续出现 ≥2 个低于阈值的低点，且后低点 HJ10 抬高、收盘价却创新低** 的股票，并记录每个低点和拐点的日期。
+
+## ETF 支持
+
+默认只扫 **A 股股票**，加 `--include-etf` 才纳入 ETF（沪市 51x/52x/56x/588、深市 159x）。
+
+### 用法
+
+```bat
+:: 单只 ETF（无需 --include-etf，直接指定代码即可）
+node hj-pivot-scanner.mjs --code=sh588200 --local
+
+:: 全市场，股票 + ETF
+node hj-pivot-scanner.mjs --local --include-etf
+
+:: 调整 ETF 流动性门槛（默认 1000 万元）
+node hj-pivot-scanner.mjs --local --include-etf --min-amount=5000
+```
+
+### 流动性过滤
+
+ETF 里有大量流动性极差的品种，全量扫描会被垃圾标的淹没。因此 ETF 默认过滤：
+
+> 近 **20 期**平均成交额 ≥ **1000 万元**（`--min-amount` 调门槛，`--lookback` 调统计窗口）
+
+实测效果（15 分钟，2026-10-01~11-06）：
+
+| 项 | 数量 |
+|---|---|
+| 沪市 ETF 文件 | 1669 只 |
+| 流动性过滤后 | **324 只** |
+| 过滤掉 | 1345 只 |
+
+股票不受此过滤影响（避免误杀小盘股），除非显式用 `--min-amount`。
+
+### ETF 价格精度（重要）
+
+通达信给 ETF 的分钟线用了更高精度存储：**`.lc5` 里的价格是真实价的 1/10**。
+
+| 标的 | `.day` 收盘 | `.lc5` 收盘 | 倍数 |
+|---|---|---|---|
+| sh588200（科创芯片ETF） | 8.38 | 0.838 | 10× |
+| sh520980 | 7.47 | 0.747 | 10× |
+| sh600000（股票） | 10.03 | 10.03 | 1× |
+
+好消息：**HJ10、DIF 都是相对指标，1/10 完全不影响判定结果**。脚本在输出时自动乘以倍数还原真实价格（CSV 里会看到 10.200 而不是 1.0200）。
+
+## 周期支持
+
+用 `--period` 指定级别（默认 15）：
+
+| 周期 | 参数 | 数据来源 | 默认建议阈值 |
+|---|---|---|---|
+| 5 分钟 | `--period=5` | `.lc5` 直接用（1 根） | 10 |
+| **15 分钟（默认）** | `--period=15` | `.lc5` 每 3 根合成 | 10 |
+| 30 分钟 | `--period=30` | `.lc5` 每 6 根合成 | 10 |
+| 日线 | `--period=day` | 读 `.day` 文件 | **25** |
+
+也可写 `--p=5`、`--period=5m`、`--period=日线`。
+
+### 日线的阈值要单独调
+
+HJ10 的 13 周期窗口在日线上跨 13 天，数值整体比分钟级别高。实测 200 只 × 120 日的数据：
+
+| HJ10 分布 | 值 |
+|---|---|
+| 中位数 | 39.2 |
+| 低于 25 | 25.7% |
+| 低于 10 | 仅 1.9% |
+
+所以**日线别用阈值 10**（几乎不会触发），建议 25，想要更严可以用 30/35。
+
+### 实测各周期命中数（全市场，2026-10-01~11-06）
+
+| 周期 | 参数 | 命中 | 耗时 |
+|---|---|---|---|
+| 5 分钟 | `--th=10 --md=1 --rc=15` | 387 只 | 14.2 秒 |
+| 15 分钟 | `--th=10 --md=1 --rc=15` | 217 只 | 6.8 秒 |
+| 30 分钟 | `--th=10 --md=1 --rc=15` | 79 只 | 5.7 秒 |
+| 日线 | `--th=25 --md=1 --rc=40` | 1149 只 | 9.6 秒 |
+
+周期越大，命中越少——符合「级别越大信号越稀缺」的直觉。
 
 ## 判定口径
 
@@ -179,7 +260,13 @@ node hj-pivot-scanner.mjs --local
 node hj-pivot-scanner.mjs --start=2026-11-09 --end=2026-11-09
 ```
 
-结果写入 `hj-pivot-scan\`：`latest.csv` + `result-<时间戳>.csv`。
+多看几个级别：
+
+```bat
+node hj-pivot-scanner.mjs --local --period=5
+node hj-pivot-scanner.mjs --local --period=30
+node hj-pivot-scanner.mjs --local --period=day --th=25 --rc=40
+```
 
 ## 常用命令
 
@@ -206,6 +293,7 @@ node hj-pivot-scanner.mjs --rebound-cap=30
 |---|---|---|
 | `--start` / `--end` | 最近30个交易日 | 时间范围（含边界） |
 | `--code=sh603578` | — | 只扫单只股票 |
+| `--period` / `--p` | 15 | K线周期：5 / 15 / 30 / day |
 | `--threshold` / `--th` | 25 | 低点 HJ10 阈值 |
 | `--min-down` / `--md` | 2 | 低点左侧最小连续下跌根数 |
 | `--rebound-cap` / `--rc` | 25 | 两低点之间 HJ10 上限 |
@@ -216,6 +304,9 @@ node hj-pivot-scanner.mjs --rebound-cap=30
 | `--min-drop` | 0 | 整链最小跌幅百分比 |
 | `--market=sh,sz,bj` | 全部 | 市场过滤 |
 | `--include-st` | 否 | 包含 ST 股 |
+| `--include-etf` | 否 | 包含 ETF |
+| `--min-amount` | 1000 | ETF 流动性门槛（万元） |
+| `--lookback` | 20 | 流动性统计窗口（根） |
 | `--limit=N` | — | 只扫前 N 只（调试） |
 | `-v` / `--verbose` | — | 打印低点/拐点明细 |
 
@@ -268,9 +359,11 @@ node test-backtest.mjs      # 收益回测（27 项）
 node test-dif.mjs           # DIF 条件（17 项）
 node test-args.mjs          # 参数解析（32 项）
 node test-hybrid.mjs        # 混合数据源与K线解析（25 项）
+node test-period.mjs        # 多周期支持（36 项）
+node test-etf.mjs            # ETF与流动性（36 项）
 ```
 
-共 124 项断言。
+共 196 项断言。
 
 覆盖：抖动过滤、反弹上限、两个真实案例（603578 命中 / 603679 排除）、买入价取拐点收盘、跳过非交易日、1% 分段、短长参数等价、未知参数报错、数据合并与价格差分解码。
 
@@ -280,9 +373,18 @@ node test-hybrid.mjs        # 混合数据源与K线解析（25 项）
 |---|---|
 | `hj-pivot-scanner.mjs` | 命令行入口、文件命名、CSV 输出 |
 | `hj-pivot-scan.js` | 拐点识别与背离链判定 |
+| `period.js` | 周期定义与换算（5/15/30/日线） |
+| `security-type.js` | 标的分类（股票/ETF）与价格倍数 |
 | `backtest.js` | 收益回测与分段统计 |
-| `lc5-reader.js` | .lc5 读取与 15 分钟聚合 |
+| `macd.js` | MACD/DIF 计算 |
+| `lc5-reader.js` | .lc5 读取、多周期聚合、.day 读取 |
+| `market-bars.js` | K线协议（0x052d）编解码 |
+| `hybrid-source.js` | 混合数据源（本地历史 + 实时补当天） |
+| `live-source.js` | 纯实时数据源 |
 | `test-hj-pivot.mjs` | 判定逻辑测试 |
 | `test-backtest.mjs` | 回测逻辑测试 |
 | `test-dif.mjs` | DIF 条件测试 |
-| `macd.js` | MACD/DIF 计算 |
+| `test-args.mjs` | 参数解析测试 |
+| `test-hybrid.mjs` | 混合数据源测试 |
+| `test-period.mjs` | 多周期测试 |
+| `test-etf.mjs` | ETF 与流动性测试 |

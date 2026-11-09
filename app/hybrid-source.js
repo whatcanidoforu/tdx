@@ -15,7 +15,7 @@
  * @module dsh-tdx/app/hybrid-source
  */
 
-import { readLc5As15Min } from './lc5-reader.js';
+import { readLc5As, readDayFile } from './lc5-reader.js';
 import { TdxConnection } from './tdx-protocol.js';
 import { buildBarsRequest, parseBars, PERIOD } from './market-bars.js';
 
@@ -89,6 +89,8 @@ export async function fetchBarsHybrid(options) {
   const hosts = options.hosts ?? [...HYBRID_HOSTS];
   const concurrency = Math.min(options.concurrency ?? 5, hosts.length);
   const tailCount = options.tailCount ?? DEFAULT_TAIL;
+  const category = options.category ?? PERIOD.MIN15;
+  const groupSize = options.groupSize === undefined ? 3 : options.groupSize;
   const today = options.today ?? localToday();
   const log = options.log ?? (() => {});
 
@@ -116,11 +118,11 @@ export async function fetchBarsHybrid(options) {
       if (current >= targets.length) break;
       const target = targets[current];
 
-      // 1) 读本地历史
+      // 1) 读本地历史（按周期聚合）
       let local = [];
       if (target.file) {
         try {
-          local = readLc5As15Min(target.file);
+          local = groupSize === null ? readDayFile(target.file) : readLc5As(target.file, groupSize);
         } catch {
           local = [];
         }
@@ -132,12 +134,12 @@ export async function fetchBarsHybrid(options) {
         connection.socket.write(buildBarsRequest({
           market: target.market,
           code: target.code,
-          category: PERIOD.MIN15,
+          category,
           start: 0,
           count: tailCount,
         }));
         const body = await connection.readResponseBody();
-        if (body.length > 2) tail = parseBars(body, { category: PERIOD.MIN15 });
+        if (body.length > 2) tail = parseBars(body, { category });
       } catch {
         failed += 1;
       }

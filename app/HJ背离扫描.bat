@@ -17,7 +17,7 @@ echo     node hj-pivot-scanner.mjs --start=2026-10-01 --end=2026-11-06
 echo ==========================================================
 echo.
 
-node hj-pivot-scanner.mjs --start=2026-11-09 --end=2026-11-09 --th=15 --md=1 --rc=15 --no-dif %*
+node hj-pivot-scanner.mjs --start=2026-11-09 --end=2026-11-09 --th=15 --md=1 --rc=15 --no-dif --period=30  %*
 
 echo.
 pause

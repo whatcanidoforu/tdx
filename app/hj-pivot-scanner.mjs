@@ -33,13 +33,19 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { listLc5Files, readLc5As15Min } from './lc5-reader.js';
+import { listLc5Files, readLc5As, readDayFile } from './lc5-reader.js';
+import { readdirSync } from 'node:fs';
+import { resolvePeriod, periodNames } from './period.js';
+import { classifySecurity, SECURITY_KIND, priceScale, kindLabel } from './security-type.js';
 import { detectDivergence } from './hj-pivot-scan.js';
 import { backtestSignal, summarize } from './backtest.js';
 import { loadNameMap } from './name-service.js';
 import { fetchBarsConcurrently } from './live-source.js';
 import { fetchBarsHybrid } from './hybrid-source.js';
 import { formatStamp } from './time-format.js';
+
+/** ETF 默认流动性门槛：近 20 期平均成交额 1000 万元。 */
+const DEFAULT_ETF_MIN_AMOUNT = 1000 * 1e4;
 
 /** 默认通达信目录。 */
 const DEFAULT_TDX_HOME = 'D:\\MyTools\\new_tdx';
@@ -78,6 +84,9 @@ const OPTION_ALIASES = new Map([
   ['out', 'outDir'],
   ['limit', 'limit'],
   ['tail-count', 'tailCount'], ['tail', 'tailCount'],
+  ['period', 'period'], ['p', 'period'],
+  ['min-amount', 'minAmount'], ['liquidity', 'minAmount'],
+  ['lookback', 'liquidityLookback'],
   ['concurrency', 'concurrency'], ['jobs', 'concurrency'],
   ['code', 'code'],
   ['market', 'markets'],
@@ -91,6 +100,7 @@ const FLAG_ALIASES = new Map([
   ['no-dif', 'noDif'],
   ['live', 'live'],
   ['local', 'local'],
+  ['include-etf', 'includeETF'], ['etf', 'includeETF'],
   ['hybrid', 'hybrid'],
 ]);
 
@@ -109,6 +119,10 @@ export function parseArgs(argv) {
     reboundCap: 25,
     useDif: true,
     source: 'hybrid',
+    period: '15',
+    includeETF: false,
+    minAmount: null,
+    liquidityLookback: 20,
     concurrency: 5,
     tailCount: 16,
     minTotalRise: 0,
@@ -140,6 +154,9 @@ export function parseArgs(argv) {
       case 'outDir': options.outDir = value; break;
       case 'limit': options.limit = Number(value); break;
       case 'tailCount': options.tailCount = Number(value); break;
+      case 'period': options.period = String(value).toLowerCase(); break;
+      case 'minAmount': options.minAmount = Number(value) * 1e4; break;
+      case 'liquidityLookback': options.liquidityLookback = Number(value); break;
       case 'concurrency': options.concurrency = Number(value); break;
       case 'code': options.code = String(value).trim(); break;
       case 'markets':
@@ -153,8 +170,14 @@ export function parseArgs(argv) {
   };
 
   for (const arg of argv) {
+    // 支持 -v / -h 这类单横线开关
+    if (arg === '-v' || arg === '-h') {
+      if (arg === '-v') options.verbose = true;
+      else options.help = true;
+      continue;
+    }
     if (!arg.startsWith('--')) {
-      errors.push(`无法识别的参数: ${arg}（所有参数都要以 -- 开头）`);
+      errors.push(`无法识别的参数: ${arg}（参数要以 -- 开头）`);
       continue;
     }
     const body = arg.slice(2);
@@ -174,6 +197,7 @@ export function parseArgs(argv) {
       else if (flag === 'noDif') options.useDif = false;
       else if (flag === 'live') options.source = 'live';
       else if (flag === 'local') options.source = 'local';
+      else if (flag === 'includeETF') options.includeETF = true;
       else if (flag === 'hybrid') options.source = 'hybrid';
       continue;
     }
@@ -235,16 +259,119 @@ export function renderTable(hits, verbose = false) {
       + `${pad(`${first.datetime} ~ ${last.datetime}`, 30)}`,
     );
     if (verbose) {
+      const scale = hit.scale ?? 1;
       for (const node of hit.chain) {
         const difText = node.low.dif === null || node.low.dif === undefined ? '' : ` DIF=${node.low.dif.toFixed(3)}`;
         lines.push(
-          `      低点 ${pad(node.low.datetime, 18)} HJ10=${padR(node.low.hj10.toFixed(2), 7)}${pad(difText, 14)} 收=${padR(node.low.close.toFixed(2), 8)}`
+          `      低点 ${pad(node.low.datetime, 18)} HJ10=${padR(node.low.hj10.toFixed(2), 7)}${pad(difText, 14)} 收=${padR((node.low.close * scale).toFixed(3), 8)}`
           + `  → 拐点 ${pad(node.turn.datetime, 18)} HJ10=${padR(node.turn.hj10.toFixed(2), 7)}`,
         );
       }
     }
   });
   return lines.join('\n');
+}
+
+/* ---------------------------------------------------------------- 周期数据 */
+
+/**
+ * 枚举某个市场、某个周期的所有可用标的文件。
+ *
+ * @param {string} tdxHome
+ * @param {string} market sh/sz/bj
+ * @param {object} period 周期定义
+ * @param {{includeETF?: boolean}} [options] 是否包含 ETF
+ */
+export function listKlineFiles(tdxHome, market, period, options = {}) {
+  const includeETF = options.includeETF ?? false;
+
+  /** 判断代码是否纳入。 */
+  const accept = (code) => {
+    const kind = classifySecurity(market, code);
+    if (kind === SECURITY_KIND.STOCK) return true;
+    if (kind === SECURITY_KIND.ETF) return includeETF;
+    return false;
+  };
+
+  if (period.source === 'day') {
+    const dir = join(tdxHome, 'vipdoc', market, 'lday');
+    let files;
+    try {
+      files = readdirSync(dir);
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (const fileName of files) {
+      const match = /^[a-z]{2}(\d{6})\.day$/i.exec(fileName);
+      if (!match) continue;
+      if (!accept(match[1])) continue;
+      out.push({
+        market,
+        code: match[1],
+        file: join(dir, fileName),
+        size: 1,
+        kind: classifySecurity(market, match[1]),
+      });
+    }
+    return out;
+  }
+
+  return listLc5Files(tdxHome, market)
+    .filter((item) => accept(item.code))
+    .map((item) => ({
+      ...item,
+      size: period.groupSize,
+      kind: classifySecurity(market, item.code),
+    }));
+}
+
+/**
+ * 读本地文件，按周期聚合。
+ *
+ * @param {string} file
+ * @param {object} period 周期定义
+ */
+export function readKlineFile(file, period) {
+  if (period.source === 'day') return readDayFile(file);
+  return readLc5As(file, period.groupSize);
+}
+
+/**
+ * 流动性过滤：按最近 N 根 K 线的平均成交额筛选。
+ *
+ * 成交额单位是元。日线取最近 20 个交易日，分钟级取最近 N 根。
+ * 只针对 ETF 生效（股票不筛，避免误杀），除非显式指定 --min-amount 用于全部标的。
+ *
+ * @param {object[]} bars K 线（升序）
+ * @param {number} minAmount 日均成交额下限（元）
+ * @param {number} lookback 取最近多少根
+ * @returns {{pass: boolean, avgAmount: number}}
+ */
+export function checkLiquidity(bars, minAmount, lookback = 20) {
+  if (!(minAmount > 0)) return { pass: true, avgAmount: Number.NaN };
+  if (!bars || bars.length === 0) return { pass: false, avgAmount: 0 };
+  const recent = bars.slice(-lookback);
+  let total = 0;
+  let counted = 0;
+  for (const bar of recent) {
+    const amount = Number(bar.amount);
+    if (Number.isFinite(amount) && amount > 0) {
+      total += amount;
+      counted += 1;
+    }
+  }
+  if (counted === 0) return { pass: false, avgAmount: 0 };
+  const avgAmount = total / counted;
+  return { pass: avgAmount >= minAmount, avgAmount };
+}
+
+/** A 股代码判定。 */
+function isAShareCode(market, code) {
+  if (market === 'sh') return /^(600|601|603|605|688|689)/.test(code);
+  if (market === 'sz') return /^(000|001|002|003|300|301)/.test(code);
+  if (market === 'bj') return /^(43\d|83\d|87\d|89\d|92\d)/.test(code);
+  return false;
 }
 
 /* ---------------------------------------------------------------- 主流程 */
@@ -257,7 +384,14 @@ export async function scan(options) {
   const startedAt = new Date();
   const log = (line) => process.stdout.write(`${line}\n`);
 
-  log(`\nHJ10 底背离扫描（15 分钟）`);
+  const period = options.periodDef ?? resolvePeriod(options.period ?? '15');
+  if (!period) {
+    log(`  无法识别的周期：${options.period}（可用：${periodNames().join(' / ')}）`);
+    return { hits: [], scanned: 0, skipped: 0 };
+  }
+  const periodLabel = period.label;
+
+  log(`\nHJ10 底背离扫描（${periodLabel}）`);
   log(`  通达信目录：${options.tdxHome}`);
   log(`  口径：HJ10<${options.threshold} 的低点，连续 ≥${options.minPivots} 个，后低点 HJ10 抬高 + 收盘价新低`);
 
@@ -270,35 +404,46 @@ export async function scan(options) {
       return { hits: [], scanned: 0, skipped: 0 };
     }
     const market = match[1].toLowerCase();
-    const found = listLc5Files(options.tdxHome, market).find((f) => f.code === match[2]);
+    // 显式指定代码时无条件支持（含 ETF），不受 --include-etf 限制
+    const found = listKlineFiles(options.tdxHome, market, period, { includeETF: true })
+      .find((f) => f.code === match[2]);
     if (!found) {
-      log(`  找不到 ${options.code} 的 15 分钟数据`);
+      log(`  找不到 ${options.code} 的 ${periodLabel} 数据`);
       return { hits: [], scanned: 0, skipped: 0 };
     }
     candidates = [found];
-    log(`  只扫描：${options.code}`);
+    log(`  只扫描：${options.code}（${kindLabel(found.kind ?? SECURITY_KIND.STOCK)}）`);
   } else {
     for (const market of options.markets) {
-      candidates.push(...listLc5Files(options.tdxHome, market));
+      candidates.push(...listKlineFiles(options.tdxHome, market, period, {
+        includeETF: options.includeETF,
+      }));
     }
     if (options.limit) candidates.splice(options.limit);
+    const etfCount = candidates.filter((c) => c.kind === SECURITY_KIND.ETF).length;
+    if (etfCount > 0) log(`  其中 ETF ${etfCount} 只（--include-etf）`);
   }
 
   // 未指定范围 → 最近 30 个交易日
   let startDate = options.startDate;
   const endDate = options.endDate;
   if (!startDate && !endDate && candidates.length > 0) {
-    const probe = readLc5As15Min(candidates[0].file);
+    const probe = readKlineFile(candidates[0].file, period);
     const days = [...new Set(probe.map((b) => b.date))].sort();
     startDate = days[Math.max(0, days.length - 30)];
     log(`  未指定范围，自动取最近 30 个交易日：${startDate} 起`);
   }
-  if (startDate || endDate) log(`  范围：${startDate ?? '最早'} ~ ${endDate ?? '最新'}`);
-  log(`  候选股票：${candidates.length} 只\n`);
+  if (startDate || endDate) log(`  范围：${startDate ?? '最长'} ~ ${endDate ?? '最新'}`);
+  if (options.minAmount > 0) {
+    log(`  流动性过滤：ETF 近 ${options.liquidityLookback ?? 20} 期均价成交额 ≥ `
+      + `${(options.minAmount / 1e4).toFixed(0)} 万元`);
+  }
+  log(`  候选标的：${candidates.length} 只\n`);
 
   const hits = [];
   let scanned = 0;
   let skipped = 0;
+  let illiquid = 0;
   const t0 = Date.now();
 
   // 数据源选择：
@@ -315,11 +460,13 @@ export async function scan(options) {
       symbol: `${candidate.market}${candidate.code}`,
       file: candidate.file,
     }));
-    log(`  混合模式：本地历史 + 主站补当天（${targets.length} 只）…`);
+    log(`  混合模式：本地历史 + 主站补当天（${targets.length} 只，${periodLabel}）…`);
     const fetched = await fetchBarsHybrid({
       targets,
       concurrency: options.concurrency ?? 5,
-      tailCount: options.tailCount ?? 16,
+      tailCount: options.tailCount ?? Math.max(period.barsPerDay * 2, 16),
+      category: period.tdxCategory,
+      groupSize: period.source === 'day' ? null : period.groupSize,
       log,
     });
     liveBars = fetched.results;
@@ -332,11 +479,12 @@ export async function scan(options) {
       code: candidate.code,
       symbol: `${candidate.market}${candidate.code}`,
     }));
-    log(`  正在从行情主站实时拉取 ${targets.length} 只股票的 15 分钟 K 线…`);
+    log(`  正在从行情主站实时拉取 ${targets.length} 只股票的 ${periodLabel} K 线…`);
     const fetched = await fetchBarsConcurrently({
       targets,
       concurrency: options.concurrency ?? 5,
-      count: options.liveCount ?? 1216,
+      count: options.liveCount ?? Math.max(period.barsPerDay * 76, 400),
+      category: period.tdxCategory,
       log,
     });
     liveBars = fetched.results;
@@ -354,7 +502,7 @@ export async function scan(options) {
       }
     } else {
       try {
-        bars = readLc5As15Min(candidate.file);
+        bars = readKlineFile(candidate.file, period);
       } catch {
         skipped += 1;
         continue;
@@ -364,6 +512,19 @@ export async function scan(options) {
       skipped += 1;
       continue;
     }
+    // 流动性过滤：ETF 默认过滤，股票只在显式指定 --min-amount 时过滤
+    const kind = candidate.kind ?? SECURITY_KIND.STOCK;
+    const minAmount = kind === SECURITY_KIND.ETF
+      ? (options.minAmount ?? DEFAULT_ETF_MIN_AMOUNT)
+      : (options.stockMinAmount ?? 0);
+    if (minAmount > 0) {
+      const liquidity = checkLiquidity(bars, minAmount, options.liquidityLookback ?? 20);
+      if (!liquidity.pass) {
+        illiquid += 1;
+        continue;
+      }
+    }
+
     const result = detectDivergence(bars, {
       threshold: options.threshold,
       minPivots: options.minPivots,
@@ -386,6 +547,8 @@ export async function scan(options) {
         market: candidate.market,
         code: candidate.code,
         name: '',
+        kind,
+        scale: priceScale(kind),
         chain: result.chain,
         hj10Rise: result.hj10Rise,
         priceDropPct: result.priceDropPct,
@@ -395,7 +558,8 @@ export async function scan(options) {
     }
   }
 
-  log(`  已扫描 ${scanned} 只（跳过 ${skipped} 只无数据），耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒`);
+  log(`  已扫描 ${scanned} 只（跳过 ${skipped} 只无数据`
+    + `${illiquid > 0 ? `，${illiquid} 只流动性不足` : ''}），耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒`);
 
   // 补名称
   const outDir = options.outDir ?? join(process.cwd(), 'hj-pivot-scan');
@@ -483,6 +647,9 @@ export function buildFileBaseName(options, startDate, endDate) {
   if (options.markets && options.markets.length < 3 && !options.code) {
     parts.push(options.markets.join('+'));
   }
+  // 周期：15 分钟是默认值，其它级别显式标出
+  const periodKey = options.periodDef?.key ?? options.period ?? '15';
+  parts.push(periodKey === 'day' ? 'day' : `p${periodKey}`);
   parts.push(`th${options.threshold}`);
   parts.push(`md${options.minDownBars}`);
   parts.push(`rc${options.reboundCap}`);
@@ -502,13 +669,14 @@ export function buildFileBaseName(options, startDate, endDate) {
  */
 export function describeParams(options, startDate, endDate) {
   const rows = [
+    ['K线周期', options.periodDef?.label ?? `${options.period ?? '15'}分钟`],
     ['时间范围', endDate ? `${startDate ?? '最早'} ~ ${endDate}` : `${startDate ?? '最近30个交易日'} ~ 最新`],
     ['市场', options.code ? `单只 ${options.code}` : (options.markets ?? ['sh', 'sz', 'bj']).join('/')],
     ['HJ10低点阈值', `${options.threshold}（低于此值的点才作低点）`],
     ['左侧连跌根数', `${options.minDownBars}（小于此值视为抖动，跳过）`],
     ['反弹上限', `${options.reboundCap}（两低点之间 HJ10 涨过此值即算已反弹）`],
     ['DIF条件', options.useDif ? '开启（前低点DIF < 后低点DIF）' : '关闭（--no-dif）'],
-    ['相邻低点最小间隔', `${options.minGap} 根（每根 15 分钟）`],
+    ['相邻低点最小间隔', `${options.minGap} 根（每根 ${options.periodDef?.label ?? (options.period ?? "15") + "分钟"}）`],
     ['最少低点数', `${options.minPivots}`],
     ['整链HJ10最小抬升', options.minTotalRise > 0 ? `${options.minTotalRise}` : '不限制'],
     ['整链最小跌幅', options.minDropPct > 0 ? `${options.minDropPct}%` : '不限制'],
@@ -519,7 +687,7 @@ export function describeParams(options, startDate, endDate) {
 
 /** 结果转 CSV（含买入与 T+0/T+1/T+2 收益）。 */
 export function toCsv(hits) {
-  const header = '代码,名称,低点数,首个低点,首HJ10,首DIF,首收盘,末个低点,末HJ10,末DIF,末收盘,HJ10抬高,价格跌幅%,'
+  const header = '代码,名称,类型,低点数,首个低点,首HJ10,首DIF,首收盘,末个低点,末HJ10,末DIF,末收盘,HJ10抬高,价格跌幅%,'
     + '买入时间,买入价,T+0最高,T+0收益%,T+1最高,T+1收益%,T+2最高,T+2收益%,拐点明细';
   const lines = [header];
   for (const hit of hits) {
@@ -527,34 +695,38 @@ export function toCsv(hits) {
     const last = hit.chain[hit.chain.length - 1].low;
     const lastTurn = hit.chain[hit.chain.length - 1].turn;
     const perf = hit.perf ?? {};
+    // ETF 的分钟线价格是真实价的 1/10，展示时还原
+    const scale = hit.scale ?? 1;
     const detail = hit.chain
-      .map((n) => `低点${n.low.datetime}(HJ10=${n.low.hj10.toFixed(2)},收=${n.low.close.toFixed(2)}`
+      .map((n) => `低点${n.low.datetime}(HJ10=${n.low.hj10.toFixed(2)},收=${(n.low.close * scale).toFixed(3)}`
         + `${n.low.dif === null || n.low.dif === undefined ? '' : `,DIF=${n.low.dif.toFixed(3)}`})`
         + `→拐点${n.turn.datetime}(HJ10=${n.turn.hj10.toFixed(2)})`)
       .join(' | ');
     const fmt = (v) => (Number.isFinite(v) ? v.toFixed(2) : '');
+    const fmtPrice = (v) => (Number.isFinite(v) ? (v * scale).toFixed(3) : '');
     const fmtDif = (v) => (Number.isFinite(v) ? v.toFixed(3) : '');
     lines.push([
       `${hit.market}${hit.code}`,
       escapeCsv(hit.name || ''),
+      kindLabel(hit.kind ?? SECURITY_KIND.STOCK),
       hit.chain.length,
       first.datetime,
       first.hj10.toFixed(2),
       fmtDif(first.dif),
-      first.close.toFixed(2),
+      fmtPrice(first.close),
       last.datetime,
       last.hj10.toFixed(2),
       fmtDif(last.dif),
-      last.close.toFixed(2),
+      fmtPrice(last.close),
       hit.hj10Rise.toFixed(2),
       hit.priceDropPct.toFixed(2),
       lastTurn.datetime,
-      fmt(perf.buyPrice),
-      fmt(perf.t0High),
+      fmtPrice(perf.buyPrice),
+      fmtPrice(perf.t0High),
       fmt(perf.t0),
-      fmt(perf.t1High),
+      fmtPrice(perf.t1High),
       fmt(perf.t1),
-      fmt(perf.t2High),
+      fmtPrice(perf.t2High),
       fmt(perf.t2),
       escapeCsv(detail),
     ].join(','));
@@ -666,11 +838,14 @@ function escapeCsv(text) {
 
 function printHelp() {
   process.stdout.write([
-    '通达信 · HJ10 底背离扫描（15 分钟级别）',
+    '通达信 · HJ10 底背离扫描（支持 5/15/30 分钟 与 日线）',
     '',
     '判定：HJ10<25 的低点，连续 >=2 个，后一个低点的 HJ10 抬高、收盘价创新低',
     '',
     '用法：',
+    '  node hj-pivot-scanner.mjs --period=5                       5分钟级别',
+    '  node hj-pivot-scanner.mjs --period=30                      30分钟级别',
+    '  node hj-pivot-scanner.mjs --period=day                     日线级别',
     '  node hj-pivot-scanner.mjs                                       扫描全部A股（最近30个交易日）',
     '  node hj-pivot-scanner.mjs --start=2026-10-01 --end=2026-11-06   指定时间范围',
     '  node hj-pivot-scanner.mjs --code=sh603578 --verbose             只看单只股票',
@@ -679,6 +854,7 @@ function printHelp() {
     '  --start=YYYY-MM-DD   起始日期（含）',
     '  --end=YYYY-MM-DD     结束日期（含）',
     '  --code=sh603578      只扫描指定股票',
+    '  --period=15          K线周期：5 / 15 / 30 / day（默认 15，可简写 --p）',
     '  --threshold=25       低点 HJ10 阈值（默认 25，可简写 --th）',
     '  --min-pivots=2       最少低点数（默认 2，可简写 --mp）',
     '  --min-down=2         低点左侧最小连续下跌根数（默认 2，可简写 --md）',
@@ -696,6 +872,9 @@ function printHelp() {
     '  --min-drop=0         整链最小跌幅百分比（默认 0，调大更严格）',
     '  --market=sh,sz,bj    只扫指定市场（默认全部）',
     '  --include-st         包含 ST 股（默认排除）',
+    '  --include-etf        包含 ETF（默认只扫股票，ETF 受流动性过滤）',
+    '  --min-amount=1000    ETF 流动性门槛：近20期平均成交额（万元，默认1000）',
+    '  --lookback=20        流动性统计取最近多少根',
     '  --tdx=<目录>         通达信目录（默认 D:\\MyTools\\new_tdx）',
     '  --out=<目录>         输出目录（默认 ./hj-pivot-scan）',
     '  --limit=N            只扫前 N 只（调试用）',
