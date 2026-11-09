@@ -37,6 +37,8 @@ import { listLc5Files, readLc5As15Min } from './lc5-reader.js';
 import { detectDivergence } from './hj-pivot-scan.js';
 import { backtestSignal, summarize } from './backtest.js';
 import { loadNameMap } from './name-service.js';
+import { fetchBarsConcurrently } from './live-source.js';
+import { fetchBarsHybrid } from './hybrid-source.js';
 import { formatStamp } from './time-format.js';
 
 /** 默认通达信目录。 */
@@ -55,6 +57,48 @@ function normalizeDate(value) {
  * 解析命令行。
  * @param {string[]} argv
  */
+/**
+ * 参数别名表：长名 + 短名 → 内部字段。
+ *
+ * 短名是为了手敲方便（--th=10 等价于 --threshold=10）。
+ * 注意：无法识别的参数会直接报错，不再静默忽略——否则手滑写错一个参数，
+ * 结果会悄悄按默认值跑，文件和内容都对不上。
+ */
+const OPTION_ALIASES = new Map([
+  ['threshold', 'threshold'], ['th', 'threshold'],
+  ['minpivots', 'minPivots'], ['min-pivots', 'minPivots'], ['mp', 'minPivots'],
+  ['mingap', 'minGap'], ['min-gap', 'minGap'], ['gp', 'minGap'],
+  ['mindown', 'minDownBars'], ['min-down', 'minDownBars'], ['md', 'minDownBars'],
+  ['reboundcap', 'reboundCap'], ['rebound-cap', 'reboundCap'], ['rc', 'reboundCap'],
+  ['minrise', 'minTotalRise'], ['min-rise', 'minTotalRise'], ['rise', 'minTotalRise'],
+  ['mindrop', 'minDropPct'], ['min-drop', 'minDropPct'], ['drop', 'minDropPct'],
+  ['start', 'startDate'],
+  ['end', 'endDate'],
+  ['tdx', 'tdxHome'],
+  ['out', 'outDir'],
+  ['limit', 'limit'],
+  ['tail-count', 'tailCount'], ['tail', 'tailCount'],
+  ['concurrency', 'concurrency'], ['jobs', 'concurrency'],
+  ['code', 'code'],
+  ['market', 'markets'],
+]);
+
+/** 开关型参数（不带值）。 */
+const FLAG_ALIASES = new Map([
+  ['help', 'help'], ['h', 'help'],
+  ['verbose', 'verbose'], ['v', 'verbose'],
+  ['include-st', 'includeST'],
+  ['no-dif', 'noDif'],
+  ['live', 'live'],
+  ['local', 'local'],
+  ['hybrid', 'hybrid'],
+]);
+
+/** 参数说明，用于报错提示。 */
+const KNOWN_OPTIONS_HINT = '--start --end --code --market --threshold/--th --min-down/--md '
+  + '--rebound-cap/--rc --min-gap/--gp --min-rise --min-drop --min-pivots --no-dif '
+  + '--include-st --tdx --out --limit --verbose';
+
 export function parseArgs(argv) {
   const options = {
     tdxHome: DEFAULT_TDX_HOME,
@@ -64,6 +108,9 @@ export function parseArgs(argv) {
     minDownBars: 2,
     reboundCap: 25,
     useDif: true,
+    source: 'hybrid',
+    concurrency: 5,
+    tailCount: 16,
     minTotalRise: 0,
     minDropPct: 0,
     startDate: null,
@@ -76,27 +123,78 @@ export function parseArgs(argv) {
     includeST: false,
     help: false,
   };
-  for (const arg of argv) {
-    if (arg === '--help' || arg === '-h') options.help = true;
-    else if (arg === '--verbose' || arg === '-v') options.verbose = true;
-    else if (arg === '--include-st') options.includeST = true;
-    else if (arg.startsWith('--threshold=')) options.threshold = Number(arg.slice(12));
-    else if (arg.startsWith('--min-pivots=')) options.minPivots = Number(arg.slice(13));
-    else if (arg.startsWith('--min-gap=')) options.minGap = Number(arg.slice(10));
-    else if (arg.startsWith('--min-down=')) options.minDownBars = Number(arg.slice(11));
-    else if (arg.startsWith('--rebound-cap=')) options.reboundCap = Number(arg.slice(14));
-    else if (arg === '--no-dif') options.useDif = false;
-    else if (arg.startsWith('--min-rise=')) options.minTotalRise = Number(arg.slice(11));
-    else if (arg.startsWith('--min-drop=')) options.minDropPct = Number(arg.slice(11));
-    else if (arg.startsWith('--start=')) options.startDate = normalizeDate(arg.slice(8));
-    else if (arg.startsWith('--end=')) options.endDate = normalizeDate(arg.slice(6));
-    else if (arg.startsWith('--tdx=')) options.tdxHome = arg.slice(6);
-    else if (arg.startsWith('--out=')) options.outDir = arg.slice(6);
-    else if (arg.startsWith('--limit=')) options.limit = Number(arg.slice(8));
-    else if (arg.startsWith('--code=')) options.code = arg.slice(7).trim();
-    else if (arg.startsWith('--market=')) {
-      options.markets = arg.slice(9).split(',').map((m) => m.trim().toLowerCase()).filter(Boolean);
+
+  const errors = [];
+  const applyValue = (field, value, rawArg) => {
+    switch (field) {
+      case 'threshold': options.threshold = Number(value); break;
+      case 'minPivots': options.minPivots = Number(value); break;
+      case 'minGap': options.minGap = Number(value); break;
+      case 'minDownBars': options.minDownBars = Number(value); break;
+      case 'reboundCap': options.reboundCap = Number(value); break;
+      case 'minTotalRise': options.minTotalRise = Number(value); break;
+      case 'minDropPct': options.minDropPct = Number(value); break;
+      case 'startDate': options.startDate = normalizeDate(value); break;
+      case 'endDate': options.endDate = normalizeDate(value); break;
+      case 'tdxHome': options.tdxHome = value; break;
+      case 'outDir': options.outDir = value; break;
+      case 'limit': options.limit = Number(value); break;
+      case 'tailCount': options.tailCount = Number(value); break;
+      case 'concurrency': options.concurrency = Number(value); break;
+      case 'code': options.code = String(value).trim(); break;
+      case 'markets':
+        options.markets = String(value).split(',').map((m) => m.trim().toLowerCase()).filter(Boolean);
+        break;
+      default: break;
     }
+    if (value === '' || value === undefined) {
+      errors.push(`参数 ${rawArg} 缺少取值`);
+    }
+  };
+
+  for (const arg of argv) {
+    if (!arg.startsWith('--')) {
+      errors.push(`无法识别的参数: ${arg}（所有参数都要以 -- 开头）`);
+      continue;
+    }
+    const body = arg.slice(2);
+    const equals = body.indexOf('=');
+    const name = (equals >= 0 ? body.slice(0, equals) : body).toLowerCase();
+
+    // 开关型
+    const flag = FLAG_ALIASES.get(name);
+    if (flag) {
+      if (equals >= 0) {
+        errors.push(`参数 --${name} 不接受取值`);
+        continue;
+      }
+      if (flag === 'help') options.help = true;
+      else if (flag === 'verbose') options.verbose = true;
+      else if (flag === 'includeST') options.includeST = true;
+      else if (flag === 'noDif') options.useDif = false;
+      else if (flag === 'live') options.source = 'live';
+      else if (flag === 'local') options.source = 'local';
+      else if (flag === 'hybrid') options.source = 'hybrid';
+      continue;
+    }
+
+    // 取值型
+    const field = OPTION_ALIASES.get(name);
+    if (!field) {
+      errors.push(`无法识别的参数: --${name}`);
+      continue;
+    }
+    const value = equals >= 0 ? body.slice(equals + 1) : undefined;
+    if (value === undefined) {
+      errors.push(`参数 --${name} 需要用 = 给值，例如 --${name}=10`);
+      continue;
+    }
+    applyValue(field, value, `--${name}`);
+  }
+
+  if (errors.length > 0) {
+    options.errors = errors;
+    options.errorHint = `可用参数：${KNOWN_OPTIONS_HINT}`;
   }
   return options;
 }
@@ -203,13 +301,64 @@ export async function scan(options) {
   let skipped = 0;
   const t0 = Date.now();
 
+  // 数据源选择：
+  //   hybrid（默认）本地历史 + 主站补当天
+  //   live          全部从主站拉
+  //   local         只读本地文件
+  let liveBars = null;
+  let dataSource = 'local';
+  if (options.source === 'hybrid') {
+    dataSource = 'hybrid';
+    const targets = candidates.map((candidate) => ({
+      market: candidate.market === 'sh' ? 1 : candidate.market === 'sz' ? 0 : 2,
+      code: candidate.code,
+      symbol: `${candidate.market}${candidate.code}`,
+      file: candidate.file,
+    }));
+    log(`  混合模式：本地历史 + 主站补当天（${targets.length} 只）…`);
+    const fetched = await fetchBarsHybrid({
+      targets,
+      concurrency: options.concurrency ?? 5,
+      tailCount: options.tailCount ?? 16,
+      log,
+    });
+    liveBars = fetched.results;
+    log(`  数据就绪：${liveBars.size} 只（含本地历史 ${fetched.localOnly + fetched.merged} 只，`
+      + `其中补了实时 ${fetched.merged} 只），耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒`);
+  } else if (options.source === 'live') {
+    dataSource = 'live';
+    const targets = candidates.map((candidate) => ({
+      market: candidate.market === 'sh' ? 1 : candidate.market === 'sz' ? 0 : 2,
+      code: candidate.code,
+      symbol: `${candidate.market}${candidate.code}`,
+    }));
+    log(`  正在从行情主站实时拉取 ${targets.length} 只股票的 15 分钟 K 线…`);
+    const fetched = await fetchBarsConcurrently({
+      targets,
+      concurrency: options.concurrency ?? 5,
+      count: options.liveCount ?? 1216,
+      log,
+    });
+    liveBars = fetched.results;
+    log(`  实时数据就绪：成功 ${liveBars.size} 只，失败 ${fetched.failed} 只，`
+      + `耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒`);
+  }
+
   for (const candidate of candidates) {
     let bars;
-    try {
-      bars = readLc5As15Min(candidate.file);
-    } catch {
-      skipped += 1;
-      continue;
+    if (liveBars) {
+      bars = liveBars.get(`${candidate.market}${candidate.code}`);
+      if (!bars || bars.length === 0) {
+        skipped += 1;
+        continue;
+      }
+    } else {
+      try {
+        bars = readLc5As15Min(candidate.file);
+      } catch {
+        skipped += 1;
+        continue;
+      }
     }
     if (bars.length < 30) {
       skipped += 1;
@@ -319,10 +468,17 @@ export async function scan(options) {
  * 用指令参数拼文件名。
  * 例：hj_20261008_20261106_md2_rc25_mr0_md0p0
  */
+/**
+ * 用指令参数拼文件名。
+ *
+ * 每个参数都带上完整的短名标识，便于一眼看出跑的什么配置：
+ *   hj_20260716-20261106_th10_md1_rc15_nodif_gp3
+ *   └ 日期范围 ┘      └阈值┘└连跌┘└反弹上限┘└DIF┘└间隔┘
+ */
 export function buildFileBaseName(options, startDate, endDate) {
   const parts = ['hj'];
-  parts.push(startDate ?? 'all');
-  if (endDate) parts.push(`to${endDate}`);
+  const rangeStart = startDate ?? 'all';
+  parts.push(endDate ? `${rangeStart}-${endDate}` : rangeStart);
   if (options.code) parts.push(options.code);
   if (options.markets && options.markets.length < 3 && !options.code) {
     parts.push(options.markets.join('+'));
@@ -330,12 +486,35 @@ export function buildFileBaseName(options, startDate, endDate) {
   parts.push(`th${options.threshold}`);
   parts.push(`md${options.minDownBars}`);
   parts.push(`rc${options.reboundCap}`);
-  if (!options.useDif) parts.push('nodif');
+  parts.push(options.useDif ? 'dif' : 'nodif');
   parts.push(`gp${options.minGap}`);
+  if (options.minPivots !== 2) parts.push(`mp${options.minPivots}`);
   if (options.minTotalRise > 0) parts.push(`rise${options.minTotalRise}`);
   if (options.minDropPct > 0) parts.push(`drop${String(options.minDropPct).replace('.', 'p')}`);
   if (options.includeST) parts.push('st');
   return parts.join('_');
+}
+
+/**
+ * 生成参数的完整文字描述，用于统计文件。
+ *
+ * 每个参数写清楚「名称 + 当前值 + 默认值」，方便日后回看当时的配置。
+ */
+export function describeParams(options, startDate, endDate) {
+  const rows = [
+    ['时间范围', endDate ? `${startDate ?? '最早'} ~ ${endDate}` : `${startDate ?? '最近30个交易日'} ~ 最新`],
+    ['市场', options.code ? `单只 ${options.code}` : (options.markets ?? ['sh', 'sz', 'bj']).join('/')],
+    ['HJ10低点阈值', `${options.threshold}（低于此值的点才作低点）`],
+    ['左侧连跌根数', `${options.minDownBars}（小于此值视为抖动，跳过）`],
+    ['反弹上限', `${options.reboundCap}（两低点之间 HJ10 涨过此值即算已反弹）`],
+    ['DIF条件', options.useDif ? '开启（前低点DIF < 后低点DIF）' : '关闭（--no-dif）'],
+    ['相邻低点最小间隔', `${options.minGap} 根（每根 15 分钟）`],
+    ['最少低点数', `${options.minPivots}`],
+    ['整链HJ10最小抬升', options.minTotalRise > 0 ? `${options.minTotalRise}` : '不限制'],
+    ['整链最小跌幅', options.minDropPct > 0 ? `${options.minDropPct}%` : '不限制'],
+    ['ST股', options.includeST ? '包含' : '排除'],
+  ];
+  return rows;
 }
 
 /** 结果转 CSV（含买入与 T+0/T+1/T+2 收益）。 */
@@ -394,12 +573,25 @@ export function toCsv(hits) {
 export function toStatsCsv(hits, stats, options, startDate, endDate) {
   const lines = [];
   lines.push('HJ10底背离 收益统计');
-  lines.push(`范围,${startDate ?? '全部'} ~ ${endDate ?? '最新'}`);
-  lines.push(`参数,HJ10阈值=${options.threshold},左侧连跌=${options.minDownBars},反弹上限=${options.reboundCap},`
-    + `DIF条件=${options.useDif ? '开启' : '关闭'},`
-    + `间隔=${options.minGap},信号数=${hits.length}`);
-  lines.push('买入价,最后一个拐点收盘价');
   lines.push('');
+  lines.push('【运行参数】');
+  lines.push('参数项,取值,说明');
+  for (const [name, value, note] of describeParams(options, startDate, endDate)) {
+    const [mainValue, ...rest] = String(value).split('（');
+    const inlineNote = rest.length > 0 ? rest.join('（').replace(/）$/, '') : '';
+    lines.push([name, mainValue, note ?? inlineNote].join(','));
+  }
+  lines.push(`实际信号数,${hits.length},符合条件的股票数`);
+  lines.push('');
+  lines.push('【收益口径】');
+  lines.push('项目,说明');
+  lines.push('买入价,最后一个拐点的收盘价（看到拐点才能确认信号）');
+  lines.push('T+0,买入之后同一交易日剩余15分钟K线的最高价');
+  lines.push('T+1,下一个交易日的最高价');
+  lines.push('T+2,再下一个交易日的最高价');
+  lines.push('收益公式,（卖出最高价 - 买入价） / 买入价 x 100%');
+  lines.push('');
+  lines.push('【周期汇总】');
   lines.push('周期,样本数,平均收益%,最大%,最小%,胜率%');
   for (const [key, label] of [['t0', 'T+0（买入当日）'], ['t1', 'T+1（次日）'], ['t2', 'T+2（第三日）']]) {
     const s = stats[key];
@@ -413,7 +605,7 @@ export function toStatsCsv(hits, stats, options, startDate, endDate) {
     ].join(','));
   }
   lines.push('');
-  lines.push('分段明细（1% 一段）');
+  lines.push('【分段明细】1% 一段');
   lines.push('区间,T+0笔数,T+0占比%,T+1笔数,T+1占比%,T+2笔数,T+2占比%');
   // 收集所有出现过的分段
   const labels = new Set();
@@ -431,7 +623,7 @@ export function toStatsCsv(hits, stats, options, startDate, endDate) {
     lines.push(cells.join(','));
   }
   lines.push('');
-  lines.push('逐笔明细');
+  lines.push('【逐笔明细】');
   lines.push('代码,名称,买入时间,买入价,T+0收益%,T+1收益%,T+2收益%');
   for (const hit of hits) {
     const perf = hit.perf;
@@ -487,12 +679,19 @@ function printHelp() {
     '  --start=YYYY-MM-DD   起始日期（含）',
     '  --end=YYYY-MM-DD     结束日期（含）',
     '  --code=sh603578      只扫描指定股票',
-    '  --threshold=25       低点 HJ10 阈值（默认 25）',
-    '  --min-pivots=2       最少低点数（默认 2）',
-    '  --min-down=2         低点左侧最小连续下跌根数（小于此视为抖动，默认 2）',
-    '  --min-gap=3          相邻低点最小间隔（根，默认 3）',
-    '  --rebound-cap=25     两个低点之间 HJ10 最高不能超过该值（超过=已反弹，默认 25）',
+    '  --threshold=25       低点 HJ10 阈值（默认 25，可简写 --th）',
+    '  --min-pivots=2       最少低点数（默认 2，可简写 --mp）',
+    '  --min-down=2         低点左侧最小连续下跌根数（默认 2，可简写 --md）',
+    '  --min-gap=3          相邻低点最小间隔（根，默认 3，可简写 --gp）',
+    '  --rebound-cap=25     两低点之间 HJ10 上限（默认 25，可简写 --rc）',
     '  --no-dif             关闭 DIF 条件（默认要求 前低点DIF < 后低点DIF）',
+    '',
+    '数据源（默认 --hybrid）:',
+    '  --hybrid             本地历史 + 主站补当天（推荐，盘中用这个）',
+    '  --local              只读本地 .lc5 文件（盘后，最快约 7 秒）',
+    '  --live               全部从行情主站拉历史（约 85 秒）',
+    '  --jobs=5             并发连接数（配合 hybrid/live）',
+    '  --tail=16            混合模式每只补多少根实时K线（默认16）',
     '  --min-rise=0         整链 HJ10 最小抬升量（默认 0，调大更严格）',
     '  --min-drop=0         整链最小跌幅百分比（默认 0，调大更严格）',
     '  --market=sh,sz,bj    只扫指定市场（默认全部）',
@@ -516,6 +715,11 @@ if (isMainModule()) {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
+  } else if (options.errors && options.errors.length > 0) {
+    process.stdout.write('参数有误：\n');
+    for (const error of options.errors) process.stdout.write(`  · ${error}\n`);
+    process.stdout.write(`\n${options.errorHint}\n`);
+    process.exit(2);
   } else if (!existsSync(options.tdxHome)) {
     process.stdout.write(`通达信目录不存在：${options.tdxHome}\n`);
     process.exit(1);

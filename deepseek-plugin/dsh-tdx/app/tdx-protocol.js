@@ -239,8 +239,16 @@ export class TdxConnection {
 
   /** 发送并读取一条应答体（已解压）。 */
   async call(command, body) {
+    return this.callRaw(buildRequest(command, body));
+  }
+
+  /**
+   * 发送一个已经拼好的原始请求帧，读取应答体。
+   * 供 K 线（0x052d）等帧格式特殊的命令使用。
+   * @param {Buffer} request
+   */
+  async callRaw(request) {
     if (!this.socket) throw new TdxProtocolError('连接未建立', 'NOT_CONNECTED');
-    const request = buildRequest(command, body);
     await new Promise((resolvePromise, rejectPromise) => {
       this.socket.write(request, (error) => (error
         ? rejectPromise(new TdxProtocolError(error.message, 'SEND_ERROR'))
