@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * 通达信 · HJ10 底背离扫描（15 分钟级别）
  *
@@ -37,6 +37,7 @@ import { listLc5Files, readLc5As, readDayFile } from './lc5-reader.js';
 import { readdirSync } from 'node:fs';
 import { resolvePeriod, periodNames } from './period.js';
 import { classifySecurity, SECURITY_KIND, priceScale, kindLabel } from './security-type.js';
+import { attachDailyContext } from './daily-context.js';
 import { detectDivergence } from './hj-pivot-scan.js';
 import { backtestSignal, summarize } from './backtest.js';
 import { loadNameMap } from './name-service.js';
@@ -243,23 +244,37 @@ export function renderTable(hits, verbose = false) {
   const lines = [];
   lines.push(
     `${pad('#', 4)}${pad('代码', 10)}${pad('名称', 12)}`
-    + `${pad('低点数', 8)}${padR('HJ10', 18)}${padR('跌幅', 9)}  ${pad('区间', 30)}`,
+    + `${pad('低点数', 8)}${padR('HJ10', 18)}${padR('跌幅', 9)}${padR('买入价', 10)}${padR('日线连跌', 10)}`
+    + `${padR('日HJ10降', 10)}${padR('日MACD降', 10)}  ${pad('区间', 30)}`,
   );
-  lines.push('-'.repeat(94));
+  lines.push('-'.repeat(136));
   hits.forEach((hit, index) => {
     const first = hit.chain[0].low;
     const last = hit.chain[hit.chain.length - 1].low;
+    // 买入价 = 最后一个拐点的收盘价（看到拐点才能确认信号）
+    const scale = hit.scale ?? 1;
+    const buyPrice = hit.perf?.buyPrice;
+    const buyText = Number.isFinite(buyPrice) ? (buyPrice * scale).toFixed(3) : '-';
+    // 日线 HJ10 连跌天数
+    const dailyText = Number.isFinite(hit.dailyDecline) ? `${hit.dailyDecline}天` : '-';
+    // 日线指标：买入日 vs 前一交易日
+    const dc = hit.dailyCompare;
+    const hj10LowerText = dc?.hj10Lower === true ? '是' : dc?.hj10Lower === false ? '否' : '-';
+    const macdLowerText = dc?.macdLower === true ? '是' : dc?.macdLower === false ? '否' : '-';
     lines.push(
       `${pad(String(index + 1), 4)}`
       + `${pad(`${hit.market}${hit.code}`, 10)}`
       + `${pad(hit.name || '-', 12)}`
       + `${pad(String(hit.chain.length), 8)}`
       + `${padR(`${first.hj10}→${last.hj10}`, 18)}`
-      + `${padR(`${hit.priceDropPct.toFixed(2)}%`, 9)}  `
+      + `${padR(`${hit.priceDropPct.toFixed(2)}%`, 9)}`
+      + `${padR(buyText, 10)}`
+      + `${padR(dailyText, 10)}`
+      + `${padR(hj10LowerText, 10)}`
+      + `${padR(macdLowerText, 10)}  `
       + `${pad(`${first.datetime} ~ ${last.datetime}`, 30)}`,
     );
     if (verbose) {
-      const scale = hit.scale ?? 1;
       for (const node of hit.chain) {
         const difText = node.low.dif === null || node.low.dif === undefined ? '' : ` DIF=${node.low.dif.toFixed(3)}`;
         lines.push(
@@ -592,6 +607,9 @@ export async function scan(options) {
     for (const hit of hits) hit.name = nameMap.get(`${hit.market}${hit.code}`) ?? '';
   }
 
+  // 大周期背景：日线 HJ10 连续下跌天数（用来看大周期方向对小周期信号的影响）
+  attachDailyContext(hits, options.tdxHome);
+
   // ST 过滤
   const beforeFilter = hits.length;
   const kept = options.includeST ? hits : hits.filter((hit) => !/ST|\*|退/.test(hit.name ?? ''));
@@ -612,6 +630,20 @@ export async function scan(options) {
   const stats = summarize(hits.map((hit) => hit.perf).filter(Boolean));
   log('');
   log(renderStats(stats));
+
+  // 按日线连跌天数分组，观察大周期影响
+  const dailyBreakdown = renderDailyBreakdown(hits);
+  if (dailyBreakdown) {
+    log('');
+    log(dailyBreakdown);
+  }
+
+  // 按买入日指标状态分组
+  const metricBreakdown = renderMetricBreakdown(hits);
+  if (metricBreakdown) {
+    log('');
+    log(metricBreakdown);
+  }
 
   // 落盘：文件名用参数拼
   if (hits.length > 0) {
@@ -688,7 +720,8 @@ export function describeParams(options, startDate, endDate) {
 /** 结果转 CSV（含买入与 T+0/T+1/T+2 收益）。 */
 export function toCsv(hits) {
   const header = '代码,名称,类型,低点数,首个低点,首HJ10,首DIF,首收盘,末个低点,末HJ10,末DIF,末收盘,HJ10抬高,价格跌幅%,'
-    + '买入时间,买入价,T+0最高,T+0收益%,T+1最高,T+1收益%,T+2最高,T+2收益%,拐点明细';
+    + '买入时间,买入价,T+0最高,T+0收益%,T+1最高,T+1收益%,T+2最高,T+2收益%,'
+    + '日线HJ10连跌天数,日线HJ10,前一日线HJ10,日线HJ10是否下降,日线MACD柱,前一日线MACD柱,日线MACD柱是否缩小,拐点明细';
   const lines = [header];
   for (const hit of hits) {
     const first = hit.chain[0].low;
@@ -728,6 +761,13 @@ export function toCsv(hits) {
       fmt(perf.t1),
       fmtPrice(perf.t2High),
       fmt(perf.t2),
+      Number.isFinite(hit.dailyDecline) ? hit.dailyDecline : '',
+      Number.isFinite(hit.dailyHj10) ? hit.dailyHj10.toFixed(2) : '',
+      Number.isFinite(hit.dailyCompare?.hj10Prev) ? hit.dailyCompare.hj10Prev.toFixed(2) : '',
+      hit.dailyCompare?.hj10Lower === true ? '是' : hit.dailyCompare?.hj10Lower === false ? '否' : '',
+      Number.isFinite(hit.dailyCompare?.macdHist) ? hit.dailyCompare.macdHist.toFixed(4) : '',
+      Number.isFinite(hit.dailyCompare?.macdHistPrev) ? hit.dailyCompare.macdHistPrev.toFixed(4) : '',
+      hit.dailyCompare?.macdLower === true ? '是' : hit.dailyCompare?.macdLower === false ? '否' : '',
       escapeCsv(detail),
     ].join(','));
   }
@@ -826,6 +866,89 @@ export function renderStats(stats) {
       + `${padR(f(s.min), 9)}${padR(s.winRate === null ? '-' : `${s.winRate.toFixed(1)}%`, 8)}`,
     );
   }
+  return lines.join('\n');
+}
+
+/**
+ * 按「日线 HJ10 连跌天数」分组统计收益。
+ *
+ * 用来观察大周期方向对小周期信号胜率的影响：
+ *   日线连跌越久，说明大周期跌得越深，小周期的底背离信号是否更弱？
+ *
+ * @param {object[]} hits
+ * @returns {string} 渲染好的表格
+ */
+export function renderDailyBreakdown(hits) {
+  const valid = hits.filter((hit) => hit.perf && Number.isFinite(hit.dailyDecline));
+  if (valid.length === 0) return '';
+
+  // 分组：0天 / 1-2天 / 3-5天 / 6-10天 / 11天以上
+  const groups = [
+    { label: '0天（日线走强或走平）', test: (d) => d === 0 },
+    { label: '1-2天', test: (d) => d >= 1 && d <= 2 },
+    { label: '3-5天', test: (d) => d >= 3 && d <= 5 },
+    { label: '6-10天', test: (d) => d >= 6 && d <= 10 },
+    { label: '11天以上（日线持续走弱）', test: (d) => d >= 11 },
+  ];
+
+  const lines = ['  按日线 HJ10 连跌天数分组（看大周期影响）'];
+  lines.push('  日线连跌    样本   T+1平均    T+1胜率   T+2平均    T+2胜率');
+  let printed = 0;
+  for (const group of groups) {
+    const subset = valid.filter((hit) => group.test(hit.dailyDecline));
+    if (subset.length === 0) continue;
+    const t1 = subset.map((h) => h.perf.t1).filter((v) => Number.isFinite(v));
+    const t2 = subset.map((h) => h.perf.t2).filter((v) => Number.isFinite(v));
+    const avg = (arr) => (arr.length === 0 ? '-' : `${(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2)}%`);
+    const win = (arr) => (arr.length === 0 ? '-' : `${((arr.filter((v) => v > 0).length / arr.length) * 100).toFixed(1)}%`);
+    lines.push(
+      `  ${pad(group.label, 24)}${padR(String(subset.length), 6)}`
+      + `${padR(avg(t1), 10)}${padR(win(t1), 10)}`
+      + `${padR(avg(t2), 10)}${padR(win(t2), 10)}`,
+    );
+    printed += 1;
+  }
+  if (printed === 0) return '';
+  return lines.join('\n');
+}
+
+/**
+ * 按买入日指标状态分组统计（HJ10 是否下降、MACD柱是否缩小）。
+ *
+ * 观察：买入时指标本身还在走弱，是否影响后续胜率？
+ *
+ * @param {object[]} hits
+ * @returns {string}
+ */
+export function renderMetricBreakdown(hits) {
+  const valid = hits.filter((hit) => hit.perf && hit.dailyCompare);
+  if (valid.length === 0) return '';
+
+  const groups = [
+    { label: '日线双降（HJ10+MACD）', test: (m) => m.hj10Lower === true && m.macdLower === true },
+    { label: '仅日线HJ10降', test: (m) => m.hj10Lower === true && m.macdLower === false },
+    { label: '仅日线MACD降', test: (m) => m.hj10Lower === false && m.macdLower === true },
+    { label: '日线双升（都不降）', test: (m) => m.hj10Lower === false && m.macdLower === false },
+  ];
+
+  const lines = ['  按买入日的【日线】指标状态分组（买入日 vs 前一交易日）'];
+  lines.push('  分组                     样本   T+1平均    T+1胜率   T+2平均    T+2胜率');
+  let printed = 0;
+  for (const group of groups) {
+    const subset = valid.filter((hit) => group.test(hit.dailyCompare));
+    if (subset.length === 0) continue;
+    const t1 = subset.map((h) => h.perf.t1).filter((v) => Number.isFinite(v));
+    const t2 = subset.map((h) => h.perf.t2).filter((v) => Number.isFinite(v));
+    const avg = (arr) => (arr.length === 0 ? '-' : `${(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2)}%`);
+    const win = (arr) => (arr.length === 0 ? '-' : `${((arr.filter((v) => v > 0).length / arr.length) * 100).toFixed(1)}%`);
+    lines.push(
+      `  ${pad(group.label, 26)}${padR(String(subset.length), 6)}`
+      + `${padR(avg(t1), 10)}${padR(win(t1), 10)}`
+      + `${padR(avg(t2), 10)}${padR(win(t2), 10)}`,
+    );
+    printed += 1;
+  }
+  if (printed === 0) return '';
   return lines.join('\n');
 }
 
