@@ -102,6 +102,9 @@ const FLAG_ALIASES = new Map([
   ['live', 'live'],
   ['local', 'local'],
   ['include-etf', 'includeETF'], ['etf', 'includeETF'],
+  ['strict-gap', 'strictGap'],
+  ['daily-hj10-down', 'dailyHj10Down'],
+  ['daily-macd-down', 'dailyMacdDown'],
   ['hybrid', 'hybrid'],
 ]);
 
@@ -126,6 +129,10 @@ export function parseArgs(argv) {
     liquidityLookback: 20,
     concurrency: 5,
     tailCount: 16,
+    strictGap: false,
+    // 日线条件取值：null=不筛选（不传参数），true/false=按该条件筛选
+    dailyHj10Down: null,
+    dailyMacdDown: null,
     minTotalRise: 0,
     minDropPct: 0,
     startDate: null,
@@ -185,21 +192,35 @@ export function parseArgs(argv) {
     const equals = body.indexOf('=');
     const name = (equals >= 0 ? body.slice(0, equals) : body).toLowerCase();
 
-    // 开关型
+    // 开关型：支持两种写法
+    //   --include-etf（等于 true）
+    //   --daily-hj10=true / --daily-hj10=false（显式赋值）
     const flag = FLAG_ALIASES.get(name);
     if (flag) {
+      // 解析取值：不带 = 视为 true；带 = 则要求 true/false/1/0
+      let enabled = true;
       if (equals >= 0) {
-        errors.push(`参数 --${name} 不接受取值`);
-        continue;
+        const rawValue = body.slice(equals + 1).trim().toLowerCase();
+        if (rawValue === 'true' || rawValue === '1' || rawValue === 'yes') enabled = true;
+        else if (rawValue === 'false' || rawValue === '0' || rawValue === 'no') enabled = false;
+        else {
+          errors.push(`参数 --${name} 的取值只能是 true 或 false，收到: ${body.slice(equals + 1)}`);
+          continue;
+        }
       }
-      if (flag === 'help') options.help = true;
-      else if (flag === 'verbose') options.verbose = true;
-      else if (flag === 'includeST') options.includeST = true;
-      else if (flag === 'noDif') options.useDif = false;
-      else if (flag === 'live') options.source = 'live';
-      else if (flag === 'local') options.source = 'local';
-      else if (flag === 'includeETF') options.includeETF = true;
-      else if (flag === 'hybrid') options.source = 'hybrid';
+
+      if (flag === 'help') options.help = enabled;
+      else if (flag === 'verbose') options.verbose = enabled;
+      else if (flag === 'includeST') options.includeST = enabled;
+      else if (flag === 'includeETF') options.includeETF = enabled;
+      else if (flag === 'strictGap') options.strictGap = enabled;
+      else if (flag === 'dailyHj10Down') options.dailyHj10Down = enabled;
+      else if (flag === 'dailyMacdDown') options.dailyMacdDown = enabled;
+      // 以下三个是「唯一数据源」型开关：=false 表示关掉该项
+      else if (flag === 'noDif') options.useDif = !enabled;
+      else if (flag === 'live') { if (enabled) options.source = 'live'; else if (options.source === 'live') options.source = 'hybrid'; }
+      else if (flag === 'local') { if (enabled) options.source = 'local'; else if (options.source === 'local') options.source = 'hybrid'; }
+      else if (flag === 'hybrid') { if (enabled) options.source = 'hybrid'; }
       continue;
     }
 
@@ -245,7 +266,7 @@ export function renderTable(hits, verbose = false) {
   lines.push(
     `${pad('#', 4)}${pad('代码', 10)}${pad('名称', 12)}`
     + `${pad('低点数', 8)}${padR('HJ10', 18)}${padR('跌幅', 9)}${padR('买入价', 10)}${padR('日线连跌', 10)}`
-    + `${padR('日HJ10降', 10)}${padR('日MACD降', 10)}  ${pad('区间', 30)}`,
+    + `${padR('日HJ10降', 10)}${padR('日MACD降', 10)}  ${pad('买入时间', 18)}`,
   );
   lines.push('-'.repeat(136));
   hits.forEach((hit, index) => {
@@ -261,6 +282,7 @@ export function renderTable(hits, verbose = false) {
     const dc = hit.dailyCompare;
     const hj10LowerText = dc?.hj10Lower === true ? '是' : dc?.hj10Lower === false ? '否' : '-';
     const macdLowerText = dc?.macdLower === true ? '是' : dc?.macdLower === false ? '否' : '-';
+    const buyTime = hit.buyDatetime ?? last.datetime;
     lines.push(
       `${pad(String(index + 1), 4)}`
       + `${pad(`${hit.market}${hit.code}`, 10)}`
@@ -272,7 +294,7 @@ export function renderTable(hits, verbose = false) {
       + `${padR(dailyText, 10)}`
       + `${padR(hj10LowerText, 10)}`
       + `${padR(macdLowerText, 10)}  `
-      + `${pad(`${first.datetime} ~ ${last.datetime}`, 30)}`,
+      + `${pad(buyTime, 18)}`,
     );
     if (verbose) {
       for (const node of hit.chain) {
@@ -459,6 +481,10 @@ export async function scan(options) {
   let scanned = 0;
   let skipped = 0;
   let illiquid = 0;
+  /** 未命中原因统计（用于解释 0 只结果） */
+  const rejectReasons = new Map();
+  /** 数据质量警告（缺口等），最后统一汇总输出 */
+  const dataWarnings = [];
   const t0 = Date.now();
 
   // 数据源选择：
@@ -487,6 +513,27 @@ export async function scan(options) {
     liveBars = fetched.results;
     log(`  数据就绪：${liveBars.size} 只（含本地历史 ${fetched.localOnly + fetched.merged} 只，`
       + `其中补了实时 ${fetched.merged} 只），耗时 ${((Date.now() - t0) / 1000).toFixed(1)} 秒`);
+
+    // 缺口处理报告
+    const gap = fetched.gap;
+    if (gap) {
+      if (gap.filled > 0) {
+        log(`  ✅ 自动补齐缺口：${gap.filled} 只股票，缺失日期 ${gap.missingDates.join('、')}`);
+        for (const sample of gap.samples) log(`     ${sample}`);
+      }
+      if (gap.missingDates.length > 0 && gap.filled === 0) {
+        log(`  ⚠️ 检测到数据缺口但未能补齐：${gap.missingDates.join('、')}`);
+        log(`     部分股票的历史不连续，指标可能失真，建议先做盘后数据下载`);
+        dataWarnings.push(`数据缺口未补齐：${gap.missingDates.join('、')}`);
+      }
+      if (gap.filled > 0) {
+        dataWarnings.push(`已自动补齐缺口：${gap.missingDates.join('、')}（${gap.filled} 只）`);
+      }
+    }
+    if (options.strictGap && gap && gap.missingDates.length > 0 && gap.filled === 0) {
+      log('  --strict-gap 已开启：数据缺口未补齐，终止扫描');
+      return { hits: [], scanned: 0, skipped: 0 };
+    }
   } else if (options.source === 'live') {
     dataSource = 'live';
     const targets = candidates.map((candidate) => ({
@@ -554,22 +601,32 @@ export async function scan(options) {
       endDate,
     });
     scanned += 1;
+    if (!result.matched) {
+      // 统计未命中的原因，便于判断是「本来就没有」还是「参数太严」
+      const reason = result.reason ?? '未知原因';
+      rejectReasons.set(reason, (rejectReasons.get(reason) ?? 0) + 1);
+    }
     if (result.matched) {
-      // 回测：用最后一个拐点的收盘价买入
-      const lastTurnIndex = result.chain[result.chain.length - 1].turnIndex;
-      const perf = backtestSignal(bars, lastTurnIndex);
-      hits.push({
-        market: candidate.market,
-        code: candidate.code,
-        name: '',
-        kind,
-        scale: priceScale(kind),
-        chain: result.chain,
-        hj10Rise: result.hj10Rise,
-        priceDropPct: result.priceDropPct,
-        reason: result.reason,
-        perf,
-      });
+      // 每个买点输出一条记录：同一只股票在范围内多次出现买点就输出多行
+      for (const match of result.matches ?? [{ chain: result.chain, buyIndex: result.chain[result.chain.length - 1].turnIndex }]) {
+        const lastTurnIndex = match.buyIndex
+          ?? match.chain[match.chain.length - 1].turnIndex;
+        const perf = backtestSignal(bars, lastTurnIndex);
+        hits.push({
+          market: candidate.market,
+          code: candidate.code,
+          name: '',
+          kind,
+          scale: priceScale(kind),
+          chain: match.chain,
+          hj10Rise: match.hj10Rise ?? result.hj10Rise,
+          priceDropPct: match.priceDropPct ?? result.priceDropPct,
+          buyDatetime: match.buyDatetime
+            ?? match.chain[match.chain.length - 1].turn.datetime,
+          reason: result.reason,
+          perf,
+        });
+      }
     }
   }
 
@@ -610,16 +667,52 @@ export async function scan(options) {
   // 大周期背景：日线 HJ10 连续下跌天数（用来看大周期方向对小周期信号的影响）
   attachDailyContext(hits, options.tdxHome);
 
+  // 日线条件筛选：null=不筛选，true=只要该条件成立，false=只要该条件不成立
+  let filteredByDaily = 0;
+  const hasDailyFilter = options.dailyHj10Down !== null || options.dailyMacdDown !== null;
+  if (hasDailyFilter) {
+    const before = hits.length;
+    const kept2 = hits.filter((hit) => {
+      const dc = hit.dailyCompare;
+      if (options.dailyHj10Down !== null) {
+        if (dc?.hj10Lower !== options.dailyHj10Down) return false;
+      }
+      if (options.dailyMacdDown !== null) {
+        if (dc?.macdLower !== options.dailyMacdDown) return false;
+      }
+      return true;
+    });
+    filteredByDaily = before - kept2.length;
+    hits.length = 0;
+    hits.push(...kept2);
+  }
+
   // ST 过滤
   const beforeFilter = hits.length;
   const kept = options.includeST ? hits : hits.filter((hit) => !/ST|\*|退/.test(hit.name ?? ''));
   hits.length = 0;
   hits.push(...kept);
 
-  // 排序：低点数多的优先，其次 HJ10 抬升大的
-  hits.sort((a, b) => (b.chain.length - a.chain.length) || (b.hj10Rise - a.hj10Rise));
+  // 排序：买入时间倒序（最近的买点在最前），同时间按链长、HJ10 抬升
+  hits.sort((a, b) => {
+    const buyA = a.buyDatetime ?? a.chain[a.chain.length - 1].turn.datetime;
+    const buyB = b.buyDatetime ?? b.chain[b.chain.length - 1].turn.datetime;
+    if (buyA !== buyB) return buyA < buyB ? 1 : -1;
+    return (b.chain.length - a.chain.length) || (b.hj10Rise - a.hj10Rise);
+  });
 
-  log(`\n  符合条件：${hits.length} 只`);
+  const stockCount = new Set(hits.map((hit) => `${hit.market}${hit.code}`)).size;
+  log(`\n  符合条件：${hits.length} 条记录（${stockCount} 只股票）`);
+  if (hasDailyFilter) {
+    const conditions = [];
+    if (options.dailyHj10Down !== null) {
+      conditions.push(`日线HJ10${options.dailyHj10Down ? '下降' : '不下降'}`);
+    }
+    if (options.dailyMacdDown !== null) {
+      conditions.push(`日线MACD柱${options.dailyMacdDown ? '缩小' : '不缩小'}`);
+    }
+    log(`  （日线条件：${conditions.join(' + ')}；过滤掉 ${filteredByDaily} 只）`);
+  }
   if (!options.includeST && beforeFilter > hits.length) {
     log(`  （已过滤 ${beforeFilter - hits.length} 只 ST/退市股，加 --include-st 可保留）`);
   }
@@ -984,6 +1077,12 @@ function printHelp() {
     '  --min-gap=3          相邻低点最小间隔（根，默认 3，可简写 --gp）',
     '  --rebound-cap=25     两低点之间 HJ10 上限（默认 25，可简写 --rc）',
     '  --no-dif             关闭 DIF 条件（默认要求 前低点DIF < 后低点DIF）',
+    '',
+    '日线附加条件（默认都不过滤，仅筛选）:',
+    '  --daily-hj10-down=true   只保留日线HJ10低于前一交易日的',
+    '  --daily-hj10-down=false  只保留日线HJ10不低于前一交易日的（不传则不过滤）',
+    '  --daily-macd-down=true   只保留日线MACD柱小于前一交易日的',
+    '  --daily-macd-down=false  只保留日线MACD柱不小于前一交易日的（不传则不过滤）',
     '',
     '数据源（默认 --hybrid）:',
     '  --hybrid             本地历史 + 主站补当天（推荐，盘中用这个）',

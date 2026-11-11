@@ -50,7 +50,9 @@ export function classifySecurity(market, code) {
   }
 
   if (market === 'bj') {
-    if (/^(43\d|83\d|87\d|89\d|92\d)/.test(code)) return SECURITY_KIND.STOCK;
+    // 注意：898/899 开头是北证指数，不是股票。指数用不同的 K 线接口，
+    // 价格/日期编码与股票不一致，混进来会污染数据，必须排除。
+    if (/^(43\d|83\d|87\d|92\d)/.test(code)) return SECURITY_KIND.STOCK;
     return null;
   }
 

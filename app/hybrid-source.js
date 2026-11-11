@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 混合数据源 —— 本地历史 + 实时当日。
  *
  * 设计依据（用户的实际工作流）：
@@ -18,6 +18,7 @@
 import { readLc5As, readDayFile } from './lc5-reader.js';
 import { TdxConnection } from './tdx-protocol.js';
 import { buildBarsRequest, parseBars, PERIOD } from './market-bars.js';
+import { analyzeGap, applyPatch, filterByDates, sanitizeBars } from './gap-filler.js';
 
 /** 单次请求根数上限。 */
 const PAGE_SIZE = 800;
@@ -101,6 +102,18 @@ export async function fetchBarsHybrid(options) {
   let merged = 0;
   let localOnly = 0;
 
+  // 缺口统计
+  const gapStats = {
+    filled: 0,
+    staleOnly: 0,
+    missingDates: new Set(),
+    filledDates: new Set(),
+    filledSamples: [],
+  };
+
+  // 探测窗口：要足够覆盖缺口。15 分钟一天 16 根，5 天 = 80 根，取 400 更保险
+  const gapProbeCount = options.gapProbeCount ?? 400;
+
   /** 单连接顺序补当天。 */
   async function worker(host) {
     let connection = null;
@@ -128,30 +141,62 @@ export async function fetchBarsHybrid(options) {
         }
       }
 
-      // 2) 只拉最近几根
-      let tail = [];
+      // 2) 先拉一段足够覆盖「缺口 + 当天」的数据
+      //    缺口的判断需要拿到主站的日期序列，所以第一次先多拉一些
+      const probeCount = Math.max(tailCount, gapProbeCount);
+      let probe = [];
       try {
         connection.socket.write(buildBarsRequest({
           market: target.market,
           code: target.code,
           category,
           start: 0,
-          count: tailCount,
+          count: probeCount,
         }));
         const body = await connection.readResponseBody();
-        if (body.length > 2) tail = parseBars(body, { category });
+        if (body.length > 2) probe = sanitizeBars(parseBars(body, { category }));
       } catch {
         failed += 1;
       }
 
-      // 3) 合并
-      const combined = mergeBars(local, tail);
+      // 3) 检测缺口并用主站数据补齐
+      let combined = local;
+      let patched = 0;
+      const localDates = local.map((bar) => bar.date);
+      const probeDates = probe.map((bar) => bar.date);
+      const gap = analyzeGap(localDates, probeDates);
+
+      if (gap.missing.length > 0) {
+        // 主站数据里已经包含缺口日期，直接整段合并即可
+        const patchDates = new Set(gap.missing);
+        const patchBars = filterByDates(probe, patchDates);
+        const applied = applyPatch(local, patchBars);
+        combined = applied.bars;
+        patched = gap.missing.length;
+        gapStats.filled += 1;
+        gapStats.filledDates.add(gap.missing.join(','));
+        if (gapStats.filledSamples.length < 5) {
+          gapStats.filledSamples.push(`${target.symbol}: 补 ${gap.missing.join(',')}（${patchBars.length} 根）`);
+        }
+      } else if (gap.stale && local.length > 0 && probe.length > 0) {
+        // 本地落后但没有「中间缺口」（可能只是当天还没落盘），记录但不算问题
+        gapStats.staleOnly += 1;
+      }
+
+      // 4) 合并当天最新数据
+      combined = mergeBars(combined, probe);
       if (combined.length > 0) results.set(target.symbol, combined);
-      if (local.length > 0 && tail.length > 0) merged += 1;
+      if (local.length > 0 && probe.length > 0) merged += 1;
       else if (local.length > 0) localOnly += 1;
+      if (patched > 0) {
+        const missingSet = new Set(gap.missing);
+        for (const date of missingSet) gapStats.missingDates.add(date);
+      }
 
       done += 1;
-      if (done % 500 === 0) log(`  混合拉取进度 ${done}/${targets.length}（本地 ${localOnly}，已补实时 ${merged}）`);
+      if (done % 500 === 0) {
+        log(`  混合拉取进度 ${done}/${targets.length}（本地 ${localOnly}，已补实时 ${merged}，补缺口 ${gapStats.filled}）`);
+      }
     }
     connection.destroy();
   }
@@ -160,7 +205,19 @@ export async function fetchBarsHybrid(options) {
     Array.from({ length: concurrency }, (_, i) => worker(hosts[i % hosts.length])),
   );
 
-  return { results, failed, merged, localOnly, today };
+  return {
+    results,
+    failed,
+    merged,
+    localOnly,
+    today,
+    gap: {
+      filled: gapStats.filled,
+      staleOnly: gapStats.staleOnly,
+      missingDates: [...gapStats.missingDates].sort(),
+      samples: gapStats.filledSamples,
+    },
+  };
 }
 
 /** 本机今天的 YYYYMMDD。 */

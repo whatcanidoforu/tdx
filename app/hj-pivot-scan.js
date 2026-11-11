@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HJ10 底背离检测 —— 15 分钟级别（按用户 603578 例子定标）。
  *
  * 拐点定义（与用户口径一致）：
@@ -217,25 +217,26 @@ export function detectDivergence(bars15, options = {}) {
     threshold,
     minDownBars: options.minDownBars ?? 2,
   });
-  const inRange = allPairs.filter((pair) => {
-    const date = bars15[pair.lowIndex].date;
+
+  /** 判断某个下标是否落在日期范围内（startDate/endDate 均为 null 时总是 true）。 */
+  const inDateRange = (index) => {
+    const date = bars15[index].date;
     if (startDate && date < startDate) return false;
     if (endDate && date > endDate) return false;
     return true;
-  });
+  };
 
-  const pairs = inRange.map((pair) => toPairView(pair, hj, bars15, dif));
-
-  if (inRange.length < minPivots) {
+  if (allPairs.length < minPivots) {
     return {
       matched: false,
-      pairs,
+      pairs: [],
       chain: null,
-      reason: `范围内 HJ10<${threshold} 的低点拐点只有 ${inRange.length} 个`,
+      reason: `全量数据里 HJ10<${threshold} 的低点拐点只有 ${allPairs.length} 个`,
     };
   }
 
-  const { chains } = buildDivergenceChains(inRange, hj, bars15, {
+  // 背离链在「全量拐点」上构建：这样跨日的两次探底也能连成链
+  const { chains } = buildDivergenceChains(allPairs, hj, bars15, {
     minGap: options.minGap ?? 3,
     minHj10Rise: options.minHj10Rise ?? 0,
     reboundCap: options.reboundCap ?? 25,
@@ -257,7 +258,7 @@ export function detectDivergence(bars15, options = {}) {
   if (qualified.length === 0) {
     return {
       matched: false,
-      pairs,
+      pairs: allPairs.filter((pair) => inDateRange(pair.lowIndex)).map((p) => toPairView(p, hj, bars15, dif)),
       chain: null,
       reason: chains.length === 0
         ? '没有形成「指标抬高+价格新低」'
@@ -265,15 +266,55 @@ export function detectDivergence(bars15, options = {}) {
     };
   }
 
-  // 取最长、HJ10 抬升最大的链
-  qualified.sort((a, b) => {
+  // 日期范围只筛选「买入日」= 链上最后一个拐点（看到它才能确认信号、下单）
+  const inRangeChains = qualified.filter((chain) => {
+    const lastTurn = chain[chain.length - 1].turnIndex;
+    return inDateRange(lastTurn);
+  });
+
+  if (inRangeChains.length === 0) {
+    return {
+      matched: false,
+      pairs: allPairs.filter((pair) => inDateRange(pair.lowIndex)).map((p) => toPairView(p, hj, bars15, dif)),
+      chain: null,
+      reason: `有 ${qualified.length} 条背离链，但买入日都不在 ${startDate ?? '最早'}~${endDate ?? '最新'} 范围内`,
+    };
+  }
+
+  const pairs = allPairs
+    .filter((pair) => inDateRange(pair.lowIndex))
+    .map((pair) => toPairView(pair, hj, bars15, dif));
+
+  // 排序：买入日最近优先，其次链更长、HJ10 抬升更大
+  inRangeChains.sort((a, b) => {
+    const lastTurnOf = (chain) => chain[chain.length - 1].turnIndex;
+    const turnDiff = lastTurnOf(b) - lastTurnOf(a);
+    if (turnDiff !== 0) return turnDiff;
     if (b.length !== a.length) return b.length - a.length;
     const rise = (chain) => hj[chain[chain.length - 1].lowIndex].hj10 - hj[chain[0].lowIndex].hj10;
     return rise(b) - rise(a);
   });
 
-  const best = qualified[0];
-  const chain = best.map((pair) => toPairView(pair, hj, bars15, dif));
+  // 每条链都是一个独立买点。同一只股票在范围内可能给出多个买点，全部返回。
+  // 调用方传 onlyLatest 时只取最近一个。
+  const buildMatch = (chainPairs) => {
+    const chainView = chainPairs.map((pair) => toPairView(pair, hj, bars15, dif));
+    const firstLow = chainView[0].low;
+    const lastLow = chainView[chainView.length - 1].low;
+    const lastTurn = chainView[chainView.length - 1].turn;
+    return {
+      chain: chainView,
+      buyIndex: chainPairs[chainPairs.length - 1].turnIndex,
+      buyDate: lastTurn.date,
+      buyDatetime: lastTurn.datetime,
+      hj10Rise: Number((lastLow.hj10 - firstLow.hj10).toFixed(2)),
+      priceDropPct: Number((((lastLow.close - firstLow.close) / firstLow.close) * 100).toFixed(2)),
+    };
+  };
+
+  const allMatches = inRangeChains.map(buildMatch);
+  const matches = options.onlyLatest ? allMatches.slice(0, 1) : allMatches;
+  const chain = matches[0].chain;
 
   const firstLow = chain[0].low;
   const lastLow = chain[chain.length - 1].low;
@@ -281,10 +322,13 @@ export function detectDivergence(bars15, options = {}) {
     matched: true,
     pairs,
     chain,
+    matches,
     hj10Rise: Number((lastLow.hj10 - firstLow.hj10).toFixed(2)),
     priceDropPct: Number((((lastLow.close - firstLow.close) / firstLow.close) * 100).toFixed(2)),
-    reason: `找到 ${chain.length} 个连续低点：HJ10 由 ${firstLow.hj10} 抬高到 ${lastLow.hj10}，`
-      + `收盘价由 ${firstLow.close} 跌到 ${lastLow.close}`,
+    reason: matches.length > 1
+      ? `范围内共 ${matches.length} 个买点，最近一个是 ${matches[0].buyDatetime}`
+      : `找到 ${chain.length} 个连续低点：HJ10 由 ${firstLow.hj10} 抬高到 ${lastLow.hj10}，`
+        + `收盘价由 ${firstLow.close} 跌到 ${lastLow.close}`,
   };
 }
 
