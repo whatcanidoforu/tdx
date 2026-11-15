@@ -1,8 +1,6 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
-echo 立即扫描一次...
-echo.
-node loss-scanner.mjs --once --include-bj %*
+node loss-scanner.mjs --once %*
 echo.
 pause

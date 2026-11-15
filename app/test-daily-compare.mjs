@@ -1,13 +1,15 @@
-﻿/**
+/**
  * 日线指标对比 —— 单元测试。
  *
  * 覆盖：
  *   1. 日线 HJ10 / MACD 柱的前后比较
  *   2. 连续下跌天数
  *   3. 边界情况（买入日无日线、只有一天数据）
+ *   4. 日线滞后补齐（合并主站补丁后重算）
  */
 import {
   loadDailyIndicators, compareDailyAt, countDailyDecline, findDailyIndex, clearDailyCache,
+  loadDailyBars, localDailyLastDate, mergeDailyBars, buildDailyIndicators,
 } from './daily-context.js';
 
 let pass = 0;
@@ -119,6 +121,48 @@ check('只有一天返回 null',
   compareDailyAt({ dates: ['20261106'], hj10: [50], macd: [1] }, '20261106'), null);
 check('过早日期返回 null', compareDailyAt(daily, '19900101'), null);
 check('空数据连跌为0', countDailyDecline({ dates: [], hj10: [], macd: [] }, '20261106').days, 0);
+
+/* ------------------------------- 6. 日线滞后补齐 */
+
+// 本地日线最后日期
+const lastDate = localDailyLastDate(TDX, 'sz', '000007');
+checkTrue('本地日线最后日期是 8 位数字', /^\d{8}$/.test(lastDate ?? ''), String(lastDate));
+
+const localBars = loadDailyBars(TDX, 'sz', '000007');
+checkTrue('本地日线有数据', localBars.length > 1000, `实际 ${localBars.length}`);
+checkTrue('loadDailyBars 缓存返回同一引用', loadDailyBars(TDX, 'sz', '000007') === localBars);
+
+// mergeDailyBars：补丁覆盖同日、并追加新日期
+const fakeLocal = [
+  { date: '20261110', close: 10 },
+  { date: '20261111', close: 11 },
+];
+const fakeTail = [
+  { date: '20261111', close: 11.5 }, // 同日，补丁应覆盖
+  { date: '20261112', close: 12 }, // 新日期，应追加
+];
+const mergedFake = mergeDailyBars(fakeLocal, fakeTail);
+check('合并后3天', mergedFake.length, 3);
+check('补丁覆盖同日', mergedFake[1].close, 11.5);
+check('补丁追加新日期', mergedFake[2].date, '20261112');
+check('合并后按日期升序', mergedFake.map((b) => b.date), ['20261110', '20261111', '20261112']);
+
+// 空补丁原样返回
+check('空补丁不改动', mergeDailyBars(fakeLocal, []).length, 2);
+check('空本地直接用补丁', mergeDailyBars([], fakeTail).length, 2);
+
+// 补丁让买入日能匹配到当天（关键修复点）
+const tailBars = [{ date: '20261231', open: 12, high: 13, low: 11, close: 12.5, amount: 0, volume: 0 }];
+const withTail = loadDailyIndicators(TDX, 'sz', '000007', tailBars);
+check('补丁后最后日期是新日期', withTail.dates[withTail.dates.length - 1], '20261231');
+checkTrue('补丁后能查到新日期',
+  findDailyIndex(withTail.dates, '20261231') === withTail.dates.length - 1);
+
+// buildDailyIndicators 与直接长度一致
+const built = buildDailyIndicators(fakeLocal);
+check('指标日期数与K线数一致', built.dates.length, 2);
+check('指标hj10与日期等长', built.hj10.length, 2);
+check('指标macd与日期等长', built.macd.length, 2);
 
 console.log(`\n结果：通过 ${pass}，失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

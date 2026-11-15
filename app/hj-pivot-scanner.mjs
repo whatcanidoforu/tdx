@@ -38,10 +38,12 @@ import { readdirSync } from 'node:fs';
 import { resolvePeriod, periodNames } from './period.js';
 import { classifySecurity, SECURITY_KIND, priceScale, kindLabel } from './security-type.js';
 import { attachDailyContext } from './daily-context.js';
+import { buildXlsx } from './xlsx-writer.js';
 import { detectDivergence } from './hj-pivot-scan.js';
 import { backtestSignal, summarize } from './backtest.js';
 import { loadNameMap } from './name-service.js';
 import { fetchBarsConcurrently } from './live-source.js';
+import { PERIOD } from './market-bars.js';
 import { fetchBarsHybrid } from './hybrid-source.js';
 import { formatStamp } from './time-format.js';
 
@@ -664,8 +666,66 @@ export async function scan(options) {
     for (const hit of hits) hit.name = nameMap.get(`${hit.market}${hit.code}`) ?? '';
   }
 
-  // 大周期背景：日线 HJ10 连续下跌天数（用来看大周期方向对小周期信号的影响）
-  attachDailyContext(hits, options.tdxHome);
+  // 大周期背景：日线 HJ10 / MACD（用来看大周期方向对小周期信号的影响）
+  //
+  // 关键：本地 .day 常常缺当天（通达信收盘后不一定立刻写盘）。
+  // 如果买入日是今天而本地日线只到昨天，指标会静默回退到昨天、方向可能是反的。
+  // 所以先检测滞后，需要时从主站补最近几根日线再算。
+  let dailyTails = null;
+  let dailyLagCount = 0;
+  if (hits.length > 0) {
+    const { loadDailyBars, mergeDailyBars, localDailyLastDate } = await import('./daily-context.js');
+    // 找出「买入日晚于本地日线最后日期」的股票
+    const lagging = new Map();
+    for (const hit of hits) {
+      const buyDate = hit.perf?.buyDate;
+      if (!buyDate) continue;
+      const symbol = `${hit.market}${hit.code}`;
+      if (lagging.has(symbol)) continue;
+      const lastDate = localDailyLastDate(options.tdxHome, hit.market, hit.code);
+      if (!lastDate || lastDate < buyDate) {
+        lagging.set(symbol, { market: hit.market, code: hit.code, buyDate });
+      }
+    }
+
+    if (lagging.size > 0) {
+      dailyLagCount = lagging.size;
+      log(`  日线数据滞后：${lagging.size} 只股票的本地日线不含买入日，正在从主站补齐…`);
+      const targets = [...lagging.entries()].map(([symbol, info]) => ({
+        market: info.market === 'sh' ? 1 : info.market === 'sz' ? 0 : 2,
+        code: info.code,
+        symbol,
+      }));
+      try {
+        const fetched = await fetchBarsConcurrently({
+          targets,
+          category: PERIOD.DAY,
+          count: 10,
+          concurrency: 5,
+        });
+        dailyTails = fetched.results;
+        let patched = 0;
+        for (const [symbol, bars] of dailyTails) {
+          const info = lagging.get(symbol);
+          if (!info) continue;
+          const local = loadDailyBars(options.tdxHome, info.market, info.code);
+          const merged = mergeDailyBars(local, bars);
+          // 补齐后能覆盖买入日才算成功
+          if (merged.length > 0 && merged[merged.length - 1].date >= info.buyDate) patched += 1;
+        }
+        log(`  日线补齐完成：${patched}/${lagging.size} 只已覆盖买入日`);
+        if (patched < lagging.size) {
+          dataWarnings.push(`日线补齐不完整：${lagging.size - patched} 只仍缺买入日数据`);
+        }
+      } catch (error) {
+        log(`  ⚠️ 日线补齐失败（将使用本地数据，可能滞后）：${error.message}`);
+        dataWarnings.push('日线数据滞后且补齐失败');
+        dailyTails = null;
+      }
+    }
+  }
+
+  attachDailyContext(hits, options.tdxHome, { dailyTails: dailyTails ?? undefined });
 
   // 日线条件筛选：null=不筛选，true=只要该条件成立，false=只要该条件不成立
   let filteredByDaily = 0;
@@ -738,16 +798,38 @@ export async function scan(options) {
     log(metricBreakdown);
   }
 
-  // 落盘：文件名用参数拼
+  // 落盘：同时生成 CSV（便于程序处理）和 XLSX（WPS/Excel 直接打开，列宽已设好）
   if (hits.length > 0) {
     await mkdir(outDir, { recursive: true });
     const baseName = buildFileBaseName(options, startDate, endDate);
-    const resultFile = join(outDir, `${baseName}.csv`);
-    const statsFile = join(outDir, `${baseName}_统计.csv`);
-    await writeFile(resultFile, toCsv(hits), 'utf8');
-    await writeFile(statsFile, toStatsCsv(hits, stats, options, startDate, endDate), 'utf8');
-    log(`\n  选股结果：${resultFile}`);
-    log(`  收益统计：${statsFile}`);
+    const resultCsv = join(outDir, `${baseName}.csv`);
+    const statsCsv = join(outDir, `${baseName}_统计.csv`);
+    const resultXlsx = join(outDir, `${baseName}.xlsx`);
+
+    await writeFile(resultCsv, toCsv(hits), 'utf8');
+    await writeFile(statsCsv, toStatsCsv(hits, stats, options, startDate, endDate), 'utf8');
+
+    // XLSX：日期列设为文本（避免 #### ）、数值右对齐、百分比带 %
+    try {
+      const rows = buildResultRows(hits);
+      const xlsxBuffer = buildXlsx({
+        sheets: [{
+          title: '选股结果',
+          header: RESULT_COLUMNS.header,
+          rows,
+          meta: { numeric: RESULT_COLUMNS.numeric, percent: RESULT_COLUMNS.percent },
+          freeze: true,
+          autoFilter: true,
+        }],
+      });
+      await writeFile(resultXlsx, xlsxBuffer);
+      log(`\n  选股结果：${resultXlsx}  ← 用 WPS/Excel 打开，列宽已设好`);
+    } catch (error) {
+      log(`\n  ⚠️ XLSX 生成失败（CSV 不受影响）：${error.message}`);
+      log(`  选股结果：${resultCsv}`);
+    }
+    log(`  CSV 版本：${resultCsv}`);
+    log(`  收益统计：${statsCsv}`);
   }
 
   return { hits, stats, scanned, skipped, startDate, endDate, startedAt };
@@ -784,6 +866,13 @@ export function buildFileBaseName(options, startDate, endDate) {
   if (options.minTotalRise > 0) parts.push(`rise${options.minTotalRise}`);
   if (options.minDropPct > 0) parts.push(`drop${String(options.minDropPct).replace('.', 'p')}`);
   if (options.includeST) parts.push('st');
+  // 日线过滤条件：不传不标记，true/false 分别记为 1/0
+  if (options.dailyHj10Down !== null && options.dailyHj10Down !== undefined) {
+    parts.push(`dh${options.dailyHj10Down ? 1 : 0}`);
+  }
+  if (options.dailyMacdDown !== null && options.dailyMacdDown !== undefined) {
+    parts.push(`dm${options.dailyMacdDown ? 1 : 0}`);
+  }
   return parts.join('_');
 }
 
@@ -811,58 +900,96 @@ export function describeParams(options, startDate, endDate) {
 }
 
 /** 结果转 CSV（含买入与 T+0/T+1/T+2 收益）。 */
-export function toCsv(hits) {
-  const header = '代码,名称,类型,低点数,首个低点,首HJ10,首DIF,首收盘,末个低点,末HJ10,末DIF,末收盘,HJ10抬高,价格跌幅%,'
-    + '买入时间,买入价,T+0最高,T+0收益%,T+1最高,T+1收益%,T+2最高,T+2收益%,'
-    + '日线HJ10连跌天数,日线HJ10,前一日线HJ10,日线HJ10是否下降,日线MACD柱,前一日线MACD柱,日线MACD柱是否缩小,拐点明细';
-  const lines = [header];
+/** 选股结果的列定义（表头 + 类型标记，供 CSV 与 XLSX 共用）。 */
+export const RESULT_COLUMNS = Object.freeze({
+  header: [
+    '代码', '名称', '类型', '低点数', '首个低点', '首HJ10', '首DIF', '首收盘',
+    '末个低点', '末HJ10', '末DIF', '末收盘', 'HJ10抬高', '价格跌幅%',
+    '买入时间', '买入价', 'T+0最高价', 'T+0最高收益%', 'T+1最高价', 'T+1最高收益%', 'T+2最高价', 'T+2最高收益%',
+    '日线HJ10连跌天数', '日线HJ10', '前一日线HJ10', '日线HJ10是否下降',
+    '日线MACD柱', '前一日线MACD柱', '日线MACD柱是否缩小', '拐点明细',
+  ],
+  // 数值列（写入 xlsx 时作为数字，右对齐）
+  numeric: [
+    false, false, false, true, false, true, true, true,
+    false, true, true, true, true, true,
+    false, true, true, true, true, true, true, true,
+    true, true, true, false,
+    true, true, false, false,
+  ],
+  // 百分比列（写入 xlsx 时除以 100 并套用 % 格式）
+  percent: [
+    false, false, false, false, false, false, false, false,
+    false, false, false, false, false, true,
+    false, false, false, true, false, true, false, true,
+    false, false, false, false,
+    false, false, false, false,
+  ],
+});
+
+/**
+ * 把命中结果转成「行数组」，供 CSV 和 XLSX 共用。
+ * @param {object[]} hits
+ * @returns {(string|number)[][]}
+ */
+export function buildResultRows(hits) {
+  const rows = [];
   for (const hit of hits) {
     const first = hit.chain[0].low;
     const last = hit.chain[hit.chain.length - 1].low;
     const lastTurn = hit.chain[hit.chain.length - 1].turn;
     const perf = hit.perf ?? {};
-    // ETF 的分钟线价格是真实价的 1/10，展示时还原
     const scale = hit.scale ?? 1;
     const detail = hit.chain
       .map((n) => `低点${n.low.datetime}(HJ10=${n.low.hj10.toFixed(2)},收=${(n.low.close * scale).toFixed(3)}`
         + `${n.low.dif === null || n.low.dif === undefined ? '' : `,DIF=${n.low.dif.toFixed(3)}`})`
         + `→拐点${n.turn.datetime}(HJ10=${n.turn.hj10.toFixed(2)})`)
       .join(' | ');
-    const fmt = (v) => (Number.isFinite(v) ? v.toFixed(2) : '');
-    const fmtPrice = (v) => (Number.isFinite(v) ? (v * scale).toFixed(3) : '');
-    const fmtDif = (v) => (Number.isFinite(v) ? v.toFixed(3) : '');
-    lines.push([
+    const num = (v, digits = 2) => (Number.isFinite(v) ? v.toFixed(digits) : '');
+    // 价格需要乘以精度倍数（ETF 是 10），但 null/undefined 不能参与乘法（会变成 0）
+    const price = (v) => (Number.isFinite(v) ? (v * scale).toFixed(3) : '');
+    rows.push([
       `${hit.market}${hit.code}`,
-      escapeCsv(hit.name || ''),
+      hit.name || '',
       kindLabel(hit.kind ?? SECURITY_KIND.STOCK),
       hit.chain.length,
       first.datetime,
       first.hj10.toFixed(2),
-      fmtDif(first.dif),
-      fmtPrice(first.close),
+      num(first.dif, 3),
+      price(first.close),
       last.datetime,
       last.hj10.toFixed(2),
-      fmtDif(last.dif),
-      fmtPrice(last.close),
+      num(last.dif, 3),
+      price(last.close),
       hit.hj10Rise.toFixed(2),
       hit.priceDropPct.toFixed(2),
       lastTurn.datetime,
-      fmtPrice(perf.buyPrice),
-      fmtPrice(perf.t0High),
-      fmt(perf.t0),
-      fmtPrice(perf.t1High),
-      fmt(perf.t1),
-      fmtPrice(perf.t2High),
-      fmt(perf.t2),
+      price(perf.buyPrice),
+      price(perf.t0High),
+      num(perf.t0),
+      price(perf.t1High),
+      num(perf.t1),
+      price(perf.t2High),
+      num(perf.t2),
       Number.isFinite(hit.dailyDecline) ? hit.dailyDecline : '',
-      Number.isFinite(hit.dailyHj10) ? hit.dailyHj10.toFixed(2) : '',
-      Number.isFinite(hit.dailyCompare?.hj10Prev) ? hit.dailyCompare.hj10Prev.toFixed(2) : '',
+      num(hit.dailyHj10),
+      num(hit.dailyCompare?.hj10Prev),
       hit.dailyCompare?.hj10Lower === true ? '是' : hit.dailyCompare?.hj10Lower === false ? '否' : '',
-      Number.isFinite(hit.dailyCompare?.macdHist) ? hit.dailyCompare.macdHist.toFixed(4) : '',
-      Number.isFinite(hit.dailyCompare?.macdHistPrev) ? hit.dailyCompare.macdHistPrev.toFixed(4) : '',
+      num(hit.dailyCompare?.macdHist, 4),
+      num(hit.dailyCompare?.macdHistPrev, 4),
       hit.dailyCompare?.macdLower === true ? '是' : hit.dailyCompare?.macdLower === false ? '否' : '',
-      escapeCsv(detail),
-    ].join(','));
+      detail,
+    ]);
+  }
+  return rows;
+}
+
+/** 结果转 CSV 文本。 */
+export function toCsv(hits) {
+  const lines = [RESULT_COLUMNS.header.join(',')];
+  for (const row of buildResultRows(hits)) {
+    // 每个单元格都要转义：明细里含逗号、引号的情况
+    lines.push(row.map((cell) => escapeCsv(cell)).join(','));
   }
   return `\uFEFF${lines.join('\r\n')}\r\n`;
 }
@@ -929,7 +1056,7 @@ export function toStatsCsv(hits, stats, options, startDate, endDate) {
   }
   lines.push('');
   lines.push('【逐笔明细】');
-  lines.push('代码,名称,买入时间,买入价,T+0收益%,T+1收益%,T+2收益%');
+  lines.push('代码,名称,买入时间,买入价,T+0最高收益%,T+1最高收益%,T+2最高收益%');
   for (const hit of hits) {
     const perf = hit.perf;
     if (!perf) continue;
