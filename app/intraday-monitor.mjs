@@ -33,7 +33,8 @@ import { startLanServer } from './push/lan-server.js';
 const APP_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const CONFIG_FILE = join(APP_DIR, 'push', 'config.json');
 const STATE_FILE = join(APP_DIR, 'push', 'state.json');
-const LOG_DIR = join(APP_DIR, 'push', 'logs');
+/** 日志统一放在项目根目录的 logs/ 下（已被 .gitignore 忽略）。 */
+const LOG_DIR = join(APP_DIR, 'logs');
 const OUT_DIR = join(APP_DIR, 'intraday-output');
 
 /** 默认时点：每个 15 分钟 K 线收盘后 1 分钟。 */

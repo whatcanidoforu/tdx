@@ -2,3 +2,17 @@ node_modules/
 dist/
 .vite/
 vipdoc/
+
+# 日志文件
+*.log
+logs/
+
+# 扫描产物与运行状态
+app/hj-pivot-scan/
+app/intraday-output/
+app/data-check/
+app/names.json
+
+# 含凭证的配置（用 config.example.json 作模板）
+app/push/config.json
+app/push/state.json

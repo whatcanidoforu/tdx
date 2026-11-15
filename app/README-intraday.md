@@ -1,4 +1,4 @@
-# 盘中定时监控（intraday-monitor）
+﻿# 盘中定时监控（intraday-monitor）
 
 在每个 15 分钟 K 线收盘后自动扫描当天买点，推送到钉钉手机。
 
@@ -139,7 +139,7 @@ node intraday-monitor.mjs --once --force --date=2026-11-13
 
 ```
 intraday-output/20261113/     ← 每次扫描的 xlsx / csv
-push/logs/20261115.log        ← 运行日志
+logs/20261115.log             ← 运行日志（统一放这里，已 gitignore）
 push/state.json               ← 上次推送状态（用于算「新增」）
 ```
 

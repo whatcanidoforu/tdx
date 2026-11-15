@@ -1,0 +1,27 @@
+{
+  "_说明": "复制本文件为 config.json 并填入真实凭证。config.json 已被 .gitignore 忽略，不会入库。",
+  "_获取方式": {
+    "webhook": "钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义 → 安全设置选「自定义关键词」填「通知」→ 复制 Webhook 地址",
+    "appKey/appSecret": "open-dev.dingtalk.com → 应用开发 → 企业内部应用 → 你的应用 → 凭证与基础信息",
+    "agentId": "同上页面，基础信息里的 AgentId（一串数字）",
+    "userIds": "oa.dingtalk.com → 通讯录 → 点开自己 → 账号信息里的 userid（或用 probe 脚本查）"
+  },
+
+  "webhook": "https://oapi.dingtalk.com/robot/send?access_token=填在这里",
+  "keyword": "通知",
+
+  "appKey": "填在这里",
+  "appSecret": "填在这里",
+  "appId": "填在这里",
+  "agentId": 0,
+  "userIds": [],
+
+  "times": [
+    "09:46", "10:01", "10:16", "10:31", "10:46", "11:01", "11:16", "11:31",
+    "13:16", "13:31", "13:46", "14:01", "14:16", "14:31", "14:46", "15:01"
+  ],
+
+  "enableLanServer": false,
+  "maxListItems": 20,
+  "tdxHome": "D:\\MyTools\\new_tdx"
+}
