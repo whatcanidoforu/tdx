@@ -27,7 +27,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { sendMarkdown, sendText, renderMarkdown, renderNamesOnly } from './push/dingtalk.js';
-import { sendFile } from './push/dingtalk-file.js';
+import { sendFile, sendImage as sendFileImage } from './push/dingtalk-file.js';
+import { generateNamesImage } from './push/names-image.js';
 import { startLanServer } from './push/lan-server.js';
 
 const APP_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -509,6 +510,38 @@ async function runOnce(options) {
           log(`  ✔ 股票名称消息已推送（${hits.length} 只）`);
         } else {
           log(`  ✘ 股票名称消息推送失败：${namesResult.errmsg}（errcode ${namesResult.errcode}）`);
+        }
+      }
+
+      // 5.4 生成股票名称图片并作为工作通知发送
+      //     钉钉 Webhook 只能显示公网图片 URL，本地图片必须走企业内部应用
+      if (config.pushNamesImage !== false && hits.length > 0) {
+        if (!config.agentId || !config.userIds || config.userIds.length === 0) {
+          log('  ⚠️ 未配置 agentId/userIds，跳过名称图片');
+        } else {
+          await sleep(1500);
+          const imageResult = await generateNamesImage({
+            title: `HJ10底背离 ${dateDash} ${time}（${hits.length}只）`,
+            names: hits.map((hit) => hit.name || `${hit.market}${hit.code}`),
+            outputPath: join(OUT_DIR, dateCompact, 'names.png'),
+          });
+          if (!imageResult.ok) {
+            log(`  ⚠️ 名称图片生成失败：${imageResult.error}`);
+          } else {
+            log(`  · 名称图片已生成（${(imageResult.sizeBytes / 1024).toFixed(0)} KB）`);
+            try {
+              const sent = await sendFileImage({
+                appKey: config.appKey,
+                appSecret: config.appSecret,
+                agentId: config.agentId,
+                userIds: config.userIds,
+                imagePath: imageResult.path,
+              });
+              log(`  ✔ 名称图片已发送（task_id=${sent.taskId}）`);
+            } catch (error) {
+              log(`  ✘ 名称图片发送失败：${error.message}`);
+            }
+          }
         }
       }
     } else if (!config.webhook) {

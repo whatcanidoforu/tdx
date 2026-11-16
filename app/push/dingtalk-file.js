@@ -69,12 +69,15 @@ export async function uploadMedia(options) {
   if (stat.size > MAX_FILE_BYTES) {
     throw new Error(`文件过大（${(stat.size / 1024 / 1024).toFixed(1)} MB），钉钉上限 20 MB`);
   }
+  // type: file（默认，发文件用）或 image（发图片用）
+  const mediaType = options.type === 'image' ? 'image' : 'file';
   const buffer = readFileSync(options.filePath);
   const form = new FormData();
-  form.append('media', new Blob([buffer], { type: 'application/octet-stream' }), basename(options.filePath));
+  const mimeType = mediaType === 'image' ? 'image/png' : 'application/octet-stream';
+  form.append('media', new Blob([buffer], { type: mimeType }), basename(options.filePath));
 
   const response = await fetch(
-    `https://oapi.dingtalk.com/media/upload?access_token=${options.accessToken}&type=file`,
+    `https://oapi.dingtalk.com/media/upload?access_token=${options.accessToken}&type=${mediaType}`,
     { method: 'POST', body: form, signal: AbortSignal.timeout(60000) },
   );
   const json = await response.json();
@@ -145,6 +148,44 @@ export async function sendFile(options) {
     agentId: options.agentId,
     userIds: options.userIds,
     msg: { msgtype: 'file', file: { media_id: mediaId } },
+  });
+  return { mediaId, taskId };
+}
+
+/**
+ * 发送图片工作通知。
+ *
+ * 图片走 media/upload（type=image），再用 asyncsend_v2 的 image 消息类型。
+ * 注意：Webhook 群机器人不支持发图片，只能走企业内部应用。
+ *
+ * @param {{
+ *   appKey: string,
+ *   appSecret: string,
+ *   agentId: number|string,
+ *   userIds: string[],
+ *   imagePath: string,
+ * }} options
+ * @returns {Promise<{mediaId: string, taskId: number}>}
+ */
+export async function sendImage(options) {
+  if (!options.agentId) {
+    throw new Error('缺少 agentId（在钉钉开放平台应用详情页查看）');
+  }
+  if (!options.userIds || options.userIds.length === 0) {
+    throw new Error('缺少接收人 userid');
+  }
+  const accessToken = await getAccessToken(options.appKey, options.appSecret);
+  // 图片的 type 必须是 image，文件是 file
+  const mediaId = await uploadMedia({
+    accessToken,
+    filePath: options.imagePath,
+    type: 'image',
+  });
+  const { taskId } = await sendWorkNotice({
+    accessToken,
+    agentId: options.agentId,
+    userIds: options.userIds,
+    msg: { msgtype: 'image', image: { media_id: mediaId } },
   });
   return { mediaId, taskId };
 }
