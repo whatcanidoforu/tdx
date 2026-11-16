@@ -26,7 +26,7 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { sendMarkdown, sendText, renderMarkdown } from './push/dingtalk.js';
+import { sendMarkdown, sendText, renderMarkdown, renderNamesOnly } from './push/dingtalk.js';
 import { sendFile } from './push/dingtalk-file.js';
 import { startLanServer } from './push/lan-server.js';
 
@@ -489,6 +489,27 @@ async function runOnce(options) {
         log(`  ✔ 文本摘要已推送：${hits.length} 只全部列出（${totalChunks} 条消息）`);
       } else {
         log(`  ⚠️ 文本摘要部分失败：成功 ${sentOk}/${totalChunks} 条`);
+      }
+
+      // 5.3 追加一条「只含股票名称」的消息，便于一目了然
+      if (config.pushNames !== false) {
+        await sleep(1500);
+        const namesMsg = renderNamesOnly(hits, {
+          date: dateDash,
+          time,
+          total: hits.length,
+        });
+        const namesResult = await sendMarkdown({
+          webhook: config.webhook,
+          keyword: config.keyword,
+          title: namesMsg.title,
+          text: namesMsg.text,
+        });
+        if (namesResult.ok) {
+          log(`  ✔ 股票名称消息已推送（${hits.length} 只）`);
+        } else {
+          log(`  ✘ 股票名称消息推送失败：${namesResult.errmsg}（errcode ${namesResult.errcode}）`);
+        }
       }
     } else if (!config.webhook) {
       log('  ⚠️ 未配置 webhook，跳过文本摘要');

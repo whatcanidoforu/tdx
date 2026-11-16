@@ -142,3 +142,35 @@ function formatHitLine(hit) {
   const drop = Number.isFinite(hit.priceDropPct) ? `${hit.priceDropPct.toFixed(2)}%` : '';
   return `- \`${hit.market}${hit.code}\` ${name}｜${clock}｜买入 ${price}｜跌幅 ${drop}`;
 }
+
+/**
+ * 只含股票名称的极简消息 —— 用于「一目了然」扫一眼。
+ *
+ * 格式：名称用顿号/空格连成一整段，不列代码、不列价格。
+ * 钉钉 markdown 对超长单行会自动换行，所以整段连排也看得清。
+ *
+ * @param {object[]} hits
+ * @param {{date: string, time: string, total?: number}} meta
+ * @returns {{title: string, text: string}}
+ */
+export function renderNamesOnly(hits, meta) {
+  const total = meta.total ?? hits.length;
+  const names = hits.map((hit) => hit.name || `${hit.market}${hit.code}`);
+  const title = `${DEFAULT_KEYWORD}｜股票名称 ${meta.date} ${meta.time} 共${total}只`;
+
+  const lines = [];
+  lines.push(`## ${DEFAULT_KEYWORD}｜股票名称（${total} 只）`);
+  lines.push('');
+  lines.push(`**${meta.time}**`);
+  lines.push('');
+  if (names.length === 0) {
+    lines.push('今天没有符合条件的股票。');
+  } else {
+    // 每行 8 个名称，便于手机端阅读
+    const perLine = 8;
+    for (let i = 0; i < names.length; i += perLine) {
+      lines.push(names.slice(i, i + perLine).join('　'));
+    }
+  }
+  return { title, text: lines.join('\n') };
+}
