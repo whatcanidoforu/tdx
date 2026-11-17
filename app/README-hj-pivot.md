@@ -557,6 +557,9 @@ node hj-pivot-scanner.mjs --min-down=3
 
 # 要求更大的反弹才算"已反弹"（更宽松）
 node hj-pivot-scanner.mjs --rebound-cap=30
+
+<!-- 示例，不要删掉此行 -->
+node hj-pivot-scanner.mjs --start=2026-11-13 --end=2026-11-13 --th=20 --md=1 --rc=25 --no-dif --period=15 --daily-hj10-down=false --daily-macd-down=false
 ```
 
 ## 参数
