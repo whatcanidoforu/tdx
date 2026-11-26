@@ -72,14 +72,29 @@ export function mergeDailyBars(local, tail) {
  * 由 K 线算出日线指标序列。
  * @param {object[]} bars
  */
+/** 20 日均线周期。 */
+export const MA20_PERIOD = 20;
+
 export function buildDailyIndicators(bars) {
-  if (bars.length === 0) return { dates: [], hj10: [], macd: [] };
+  if (bars.length === 0) return { dates: [], hj10: [], macd: [], ma20: [], close: [], high: [] };
   const hj = computeHJ(bars);
   const { macd } = computeMacd(bars.map((bar) => bar.close));
+  // 20 日均线（收盘价简单移动平均）
+  const closes = bars.map((bar) => bar.close);
+  const ma20 = [];
+  let sum = 0;
+  for (let i = 0; i < closes.length; i += 1) {
+    sum += closes[i];
+    if (i >= MA20_PERIOD) sum -= closes[i - MA20_PERIOD];
+    ma20.push(i >= MA20_PERIOD - 1 ? sum / MA20_PERIOD : null);
+  }
   return {
     dates: bars.map((bar) => bar.date),
     hj10: hj.map((item) => item.hj10),
     macd,
+    ma20,
+    close: closes,
+    high: bars.map((bar) => bar.high),
   };
 }
 
@@ -214,6 +229,7 @@ export function attachDailyContext(hits, tdxHome, options = {}) {
     if (!buyDate) {
       hit.dailyDecline = null;
       hit.dailyCompare = null;
+      hit.ma20 = null;
       continue;
     }
     const symbol = `${hit.market}${hit.code}`;
@@ -223,6 +239,41 @@ export function attachDailyContext(hits, tdxHome, options = {}) {
     hit.dailyDecline = info.days;
     hit.dailyHj10 = info.hj10;
     hit.dailyCompare = compareDailyAt(daily, buyDate);
+    hit.ma20 = compareMa20(daily, buyDate);
   }
   return hits;
+}
+
+/**
+ * T 日收盘价 / 最高价 是否大于 20 日均线。
+ *
+ * @param {{dates: string[], ma20: (number|null)[], close: number[], high: number[]}} daily
+ * @param {string} date 买入日（T 日）
+ * @returns {{ma20: number|null, close: number|null, high: number|null,
+ *   closeAbove: boolean|null, highAbove: boolean|null}|null}
+ */
+export function compareMa20(daily, date) {
+  const { dates, ma20, close, high } = daily;
+  if (!dates || dates.length === 0 || !ma20) return null;
+  const index = findDailyIndex(dates, date);
+  if (index < 0) return null;
+
+  const ma = ma20[index];
+  const closeValue = close?.[index];
+  const highValue = high?.[index];
+  const result = {
+    date: dates[index],
+    ma20: Number.isFinite(ma) ? Number(ma.toFixed(2)) : null,
+    close: Number.isFinite(closeValue) ? Number(closeValue.toFixed(2)) : null,
+    high: Number.isFinite(highValue) ? Number(highValue.toFixed(2)) : null,
+    closeAbove: null,
+    highAbove: null,
+  };
+  if (result.ma20 !== null && result.close !== null) {
+    result.closeAbove = result.close > result.ma20;
+  }
+  if (result.ma20 !== null && result.high !== null) {
+    result.highAbove = result.high > result.ma20;
+  }
+  return result;
 }
